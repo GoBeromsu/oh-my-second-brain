@@ -91,3 +91,10 @@ describe("search family", () => {
     }
   });
 });
+
+it("routes observed-only discovery to the read-only engine with zero note hits requested", async () => {
+  await runSearchCommand(["--observed", '{"discover":{"limit":5}}', "--limit", "0", "--vault", "/vault"]);
+  expect(process.exitCode).toBe(0);
+  expect(calls.sessions).toEqual([{ write: false, liveLexical: true }]);
+  expect(calls.queries[0]).toMatchObject({ observed: { discover: { limit: 5 } }, limit: 0, query: "" });
+});

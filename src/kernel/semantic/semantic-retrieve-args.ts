@@ -1,3 +1,4 @@
+import { observedQueryOptions } from "../engine/axes/observed-options.js";
 import type {
   MorningRetrieveOptions,
   SemanticFusionScope,
@@ -202,7 +203,9 @@ export function embeddingSyncOptionsFromArgs(
 }
 
 export function semanticQueryOptionsFromArgs(vault: string, args: Record<string, unknown> | undefined) {
+  const observed = observedQueryOptions(args?.["observed"]);
   return {
+    ...(observed === undefined ? {} : { observed }),
     vault,
     query: stringArg(args, "query"),
     strategy: expandStrategyArg(args, "strategy"),

@@ -842,7 +842,7 @@ export function assembleLiveLexicalEngine(config: AssembleConfig, session?: Live
   };
   const adapter = new McpEngineAdapter(deps, config.vault, {
     modelCapabilityStatus: modelCapabilityStatus(config),
-    prepareLexical: (vault, queries, k, collection) => lexical.prepare(vault, queries, k, collection),
+    prepareLexical: (vault, queries, k, collection, selector) => lexical.prepare(vault, queries, k, collection, selector),
   }, config.reranker ?? owned, false);
   const release = disposal(owned, provider, () => store);
   return {

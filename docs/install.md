@@ -79,6 +79,8 @@ These are local verified acquisitions, not runtime downloads. Direct capability 
 
 ```text
 oms search <text> [--vec <text>] [--hyde <text>] [--expand] [--max-queries <1..32>] [--rerank]
+oms search --observed '{"discover":{"limit":20}}' -n 0
+oms search science --observed '{"field":{"subject":"science"},"discover":{"key":"subject","limit":20}}'
 oms search --path|--context|--link
 oms write <path>
 oms interview
@@ -88,6 +90,8 @@ oms serve mcp|http
 ```
 
 The agent writes notes, through MCP `write {path, content, template?, ifMatch?, check?}`, `oms write <path>` with the note on stdin, or, in Claude Code, through native tools judged by the guard hook. A write that breaks the sealed contract is saved with warnings; a safety refusal, a missing or stale `ifMatch`, or an unverified target leaves the file unchanged. `oms doctor audit` judges existing notes and reports `{path, field, kind}` entries without rewriting them. There is no completion command or reviewer handshake; the agent and user decide whether a note is worth keeping. The command table is [the CLI map](./cli-map.md), and the 0.18 spellings are mapped in [the migration guide](./migration-0.19.md).
+
+`--observed` accepts one JSON object for explicit current-note frontmatter filtering/discovery, independent of declared `--field` axes. Use `-n 0` for discovery-only output and put its continuation cursor inside `observed.discover`. HTTP `/search` accepts the same optional `observed` object. See [the adapter contract](./adapters.md) for bounded page/count semantics.
 
 A plain `oms search <text>` is lexical-only. Every non-lexical channel is explicit: `--vec`, `--hyde`, G004 `--expand`, and `--rerank`. G004 expansion is available only when selected; no replacement, parity, or outperformance claim is made. Search still returns notes that would fail the contract, and a missing or damaged contract does not stop it.
 

@@ -1485,3 +1485,33 @@ Valid frontmatter remains available to retrieve.
     }
   });
 });
+
+describe("observed metadata schema", () => {
+  it("accepts explicit typed exact selections only in the observed namespace", () => {
+    const search = omsMcpTools.find(tool => tool.name === "search")!;
+    const validate = new AjvJsonSchemaValidator().getValidator(search.inputSchema);
+    for (const exact of [{ valueType: "date", value: "2026-01-01T00:00:00.000Z" }, { valueType: "date", value: "+275760-09-13T00:00:00.000Z" }, { valueType: "string", value: "2026-01-01T00:00:00.000Z" }, { valueType: "number", value: 1767225600000 }, { valueType: "boolean", value: false }]) {
+      expect(validate({ op: "query", observed: { field: { when: { exact } } } }).valid).toBe(true);
+      expect(validate({ op: "query", query: "needle", axes: { field: { when: { exact } } } }).valid).toBe(false);
+    }
+    for (const exact of [{ valueType: "number", value: "1" }, { valueType: "boolean", value: "false" }, { valueType: "string", value: 1 }, { valueType: "date", value: "2026-01-01" }, { valueType: "date", value: "2026-01-01T00:00:00Z" }, { valueType: "date", value: 1767225600000 }, { valueType: "unknown", value: "x" }, { valueType: "string" }, { valueType: "string", value: "x", extra: 1 }]) {
+      expect(validate({ op: "query", observed: { field: { when: { exact } } } }).valid).toBe(false);
+    }
+  });
+  it("exposes bounded explicit filtering/discovery without query text", () => {
+    const search = omsMcpTools.find(tool => tool.name === "search")!;
+    const validate = new AjvJsonSchemaValidator().getValidator(search.inputSchema);
+    expect(validate({ op: "query", observed: { discover: {} }, limit: 0 }).valid).toBe(true);
+    expect(validate({ op: "query", mode: "query", observed: { discover: {} }, limit: 0 }).valid).toBe(true);
+    expect(validate({ op: "query", mode: "search", observed: { field: { subject: "science" } } }).valid).toBe(true);
+    expect(validate({ op: "query", query: "science", observed: { field: { score: { between: [1, 5] }, subject: ["science", "math"] }, discover: { key: "subject", limit: 100 } }, axes: { field: { status: "open" } } }).valid).toBe(true);
+    for (const observed of [null, {}, { extra: true }, { discover: { limit: 101 } }, { discover: { key: "" } }, { discover: { cursor: "x".repeat(8193) } }, { field: { tags: Array(257).fill("x") } }, { field: Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`key${i}`, "x"])) }]) {
+      expect(validate({ op: "query", observed, limit: 0 }).valid).toBe(false);
+    }
+    for (const unsupported of [{ vec: "x" }, { hyde: "x" }, { query: "x", mode: "vsearch" }, { searches: [{ type: "vec", query: "x" }] }, { query: "x", strategy: { kind: "expand", profile: "qmd-v2.8.3" } }, { collections: ["notes"] }]) {
+      expect(validate({ op: "query", observed: { discover: {} }, ...unsupported }).valid).toBe(false);
+    }
+    expect(validate({ op: "query", observed: { discover: {} }, collectionPath: "notes" }).valid).toBe(true);
+    expect((search.inputSchema.properties as Record<string, unknown>)["observed"]).toBeDefined();
+  });
+});

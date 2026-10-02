@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- `oms search --observed '<JSON>'` and HTTP `/search` accept explicit current-note frontmatter filters and bounded key/value discovery. Metadata-only requests need no query text, and `-n 0`/`limit: 0` suppresses note hits while retaining discovery.
+
 - **CLI and HTTP lexical search see unsynced note edits without repairing the persistent index.** HTTP reuses a server-owned detached native FTS corpus; each CLI invocation closes its own transient corpus. Requests that race an edit return a retry instead of stale matches with new previews.
 
 ## [0.20.6] - 2026-10-01

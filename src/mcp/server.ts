@@ -61,8 +61,27 @@ const axisScalar = { anyOf: [string, number, boolean] };
 const axisValue = { anyOf: [axisScalar, { type: "array", items: axisScalar }] };
 const fieldPredicate = { type: "object", additionalProperties: false, properties: { contains: axisValue, containsAll: { type: "array", items: axisScalar }, in: { type: "array", items: axisScalar }, between: { type: "array", items: axisScalar, minItems: 2, maxItems: 2 }, gte: axisScalar, gt: axisScalar, lte: axisScalar, lt: axisScalar, from: axisScalar, to: axisScalar } };
 const queryAxes = { type: "object", additionalProperties: false, properties: { template: string, folder: axisValue, field: { type: "object", additionalProperties: { anyOf: [axisValue, fieldPredicate] } }, link: axisValue } };
+const observedValue = { anyOf: [axisScalar, { type: "array", items: axisScalar, maxItems: 256 }] };
+const observedExact = { oneOf: [
+  { valueType: { const: "string" }, value: { type: "string", minLength: 1 } },
+  { valueType: { const: "number" }, value: number },
+  { valueType: { const: "boolean" }, value: boolean },
+  { valueType: { const: "date" }, value: { type: "string", pattern: /^(?:[0-9]{4}|[+-][0-9]{6})-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/.source } },
+].map(properties => ({ type: "object", additionalProperties: false, required: ["valueType", "value"], properties })) };
+const observedPredicate = { ...fieldPredicate, properties: { ...fieldPredicate.properties, exact: observedExact, contains: observedValue, containsAll: { type: "array", items: axisScalar, maxItems: 256 }, in: { type: "array", items: axisScalar, maxItems: 256 } } };
+const observedQuery = { type: "object", additionalProperties: false, minProperties: 1, properties: {
+  field: { type: "object", maxProperties: 32, additionalProperties: { anyOf: [observedValue, observedPredicate] } },
+  discover: { type: "object", additionalProperties: false, properties: { key: { type: "string", minLength: 1, maxLength: 512 }, limit: { type: "integer", minimum: 1, maximum: 100 }, cursor: { type: "string", minLength: 1, maxLength: 8192 } } },
+} };
 const expandStrategy = { type: "object", additionalProperties: false, properties: { kind: { ...string, enum: ["expand"] }, profile: { ...string, enum: ["qmd-v2.8.3"] }, maxQueries: { type: "integer", minimum: 1, maximum: 32 } }, required: ["kind", "profile"] } as const;
-const searchProperties = { query: string, searches: { type: "array", maxItems: 10, items: { type: "object", additionalProperties: false, properties: { type: { ...string, enum: ["lex", "vec", "hyde"] }, query: string }, required: ["type", "query"] } }, strategy: expandStrategy, collection: string, collections: stringArray, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: { type: "integer", minimum: 0, default: 10 }, candidateLimit: { type: "integer", minimum: 1 }, rerank: { ...boolean, default: false }, minScore: { ...number, default: 0 }, cursor: string, axes: queryAxes, intent: string, lex: string, vec: string, hyde: string, index: string } as const;
+const observedCompatibility = {
+  if: { required: ["observed"] },
+  then: {
+    properties: { mode: { enum: ["query", "search"] }, strategy: false, vec: false, hyde: false, searches: { items: { properties: { type: { const: "lex" } } } } },
+    allOf: [{ if: { properties: { observed: { required: ["discover"] } } }, then: { properties: { collections: { maxItems: 0 } } } }],
+  },
+};
+const searchProperties = { query: string, searches: { type: "array", maxItems: 10, items: { type: "object", additionalProperties: false, properties: { type: { ...string, enum: ["lex", "vec", "hyde"] }, query: string }, required: ["type", "query"] } }, strategy: expandStrategy, collection: string, collections: stringArray, collectionPath: string, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: { type: "integer", minimum: 0, default: 10 }, candidateLimit: { type: "integer", minimum: 1 }, rerank: { ...boolean, default: false }, minScore: { ...number, default: 0 }, cursor: string, axes: queryAxes, observed: observedQuery, intent: string, lex: string, vec: string, hyde: string, index: string } as const;
 // Some clients echo every schema default with each call, so `search {path}` accepts these unchanged.
 export const searchPathDefaults: Readonly<Record<string, unknown>> = Object.fromEntries(
   Object.entries(searchProperties).flatMap(([field, schema]) => ("default" in schema ? [[field, schema.default]] : [])),
@@ -84,6 +103,7 @@ interface SchemaBranch {
   readonly properties: Record<string, object>;
   readonly required: readonly string[];
   readonly anyOf?: readonly { readonly required: readonly string[] }[];
+  readonly allOf?: readonly object[];
 }
 
 function schemaEqual(left: object, right: object): boolean {
@@ -155,13 +175,14 @@ function operationSchema(tool: string): Tool["inputSchema"] {
       const { searches: _explicitSearches, lex: _explicitLex, vec: _explicitVec, hyde: _explicitHyde, ...explicitModeProperties } = queryProperties;
       const { mode: _implicitMode, searches: _implicitSearches, ...implicitQueryProperties } = queryProperties;
       const { mode: _typedMode, query: _typedQuery, ...implicitTypedProperties } = queryProperties;
-      branches.push({ additionalProperties: false, properties: explicitModeProperties, required: ["op", "mode", "query"] });
-      branches.push({ additionalProperties: false, properties: implicitQueryProperties, required: ["op", "query"] });
+      branches.push({ additionalProperties: false, properties: explicitModeProperties, allOf: [observedCompatibility], required: ["op", "mode"], anyOf: [{ required: ["query"] }, { required: ["observed"] }] });
+      branches.push({ additionalProperties: false, properties: implicitQueryProperties, allOf: [observedCompatibility], required: ["op", "query"] });
       branches.push({
         additionalProperties: false,
         properties: implicitTypedProperties,
+        allOf: [observedCompatibility],
         required: ["op"],
-        anyOf: [{ required: ["searches"] }, { required: ["vec"] }, { required: ["hyde"] }],
+        anyOf: [{ required: ["searches"] }, { required: ["vec"] }, { required: ["hyde"] }, { required: ["observed"] }],
       });
       continue;
     }

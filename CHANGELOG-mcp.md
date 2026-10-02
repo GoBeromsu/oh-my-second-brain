@@ -4,6 +4,10 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- Observed predicates accept `exact: {valueType, value}` and value facets return `selection` for direct reuse. Type/value mismatches are refused; exact date values are canonical ISO strings. Selection objects remain included in the existing serialized discovery-page budget.
+
+- `search` `op: query` accepts the distinct `observed: {field?, discover?}` namespace and returns bounded `observed.discovery` only on request. Metadata-only calls can use `limit: 0`; declared `axes.field` and ordinary response payloads are unchanged.
+
 - Live lexical servers retain only the detached index between requests. Reranker/model adapters remain request-owned, so changed installed-model defaults are resolved on the next request and caller-owned rerankers are never disposed.
 
 - **Repeated lexical queries reuse one read-only live snapshot per server.** Unsynced note edits are searchable immediately on the next stable request. The server no longer copies the entire persistent index once to probe existence and again to execute the same query; explicit vector operations retain their existing request-scoped validation.

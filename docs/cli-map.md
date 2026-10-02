@@ -38,6 +38,7 @@ Both run one pipeline: frame the target, conform mechanically (template variable
 | CLI | MCP tool | `op` | Required discriminator |
 |---|---|---|---|
 | `oms search <text>` | `oms_search` | `query` | Optional explicit `mode=query|search|vsearch`; typed `searches` and lexical/vector/HyDE shorthand omit `mode`. After a `--` terminator the CLI reads every token, including `--vault`, as query text. |
+| `oms search [<text>] --observed '<JSON field/discover object>' [-n 0]` | `oms_search` | `query` | Explicit `observed: {field?, discover?}`; text is optional, and `limit: 0` returns bounded discovery without hits. |
 | `oms search --context` | `oms_search` | `context` | none |
 | `oms search --path <rel>` | `oms_search` | absent | `path` alone; exclusive with `op` and every other argument, except `limit: 10`, `rerank: false` and `minScore: 0`, the schema defaults some clients echo on every call. Engine-free, normalization-insensitive exact read of one note, refused with `READ_EXACT_TOO_LARGE` above 16 MiB. A `--path` after a `--` terminator is query text, not the flag. |
 | `oms search --link <note>` | `oms_search` | `link` | `notePath` required, `folder` optional. Suggests wikilinks without writing them. Refused when combined with a `--` terminator. |

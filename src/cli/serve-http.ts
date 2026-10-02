@@ -1,3 +1,5 @@
+import { normalizeQueryOptions } from "../kernel/engine/mcp/query-mapper.js";
+import { observedQueryOptions } from "../kernel/engine/axes/observed-options.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
@@ -124,7 +126,7 @@ function stringArrayField(value: Record<string, unknown>, key: string): string[]
 
 const SEARCH_FIELDS = new Set([
   "query", "strategy", "searches", "collection", "limit", "minScore", "intent",
-  "candidateLimit", "rerank", "lex", "vec", "hyde",
+  "candidateLimit", "rerank", "lex", "vec", "hyde", "observed", "collectionPath",
 ]);
 const GET_FIELDS = new Set([
   "target", "collection", "fromLine", "lineCount", "lineNumbers", "fullPath",
@@ -173,20 +175,25 @@ function queryOptions(ctx: RouteContext, mode: SemanticSearchMode, body: unknown
   const lex = stringField(record, "lex");
   const vec = stringField(record, "vec");
   const hyde = stringField(record, "hyde");
-  if (query === undefined && searches === undefined && lex === undefined && vec === undefined && hyde === undefined) {
+  let observed;
+  try { observed = observedQueryOptions(record["observed"]); }
+  catch (error) { throw new HttpInputError(error instanceof Error ? error.message : String(error)); }
+  if (query === undefined && searches === undefined && lex === undefined && vec === undefined && hyde === undefined && observed === undefined) {
     throw new HttpInputError('Search requires one of "query", "searches", "lex", "vec", or "hyde".');
   }
   if (query !== undefined && searches !== undefined) {
     throw new HttpInputError('Fields "query" and "searches" are mutually exclusive.');
   }
-  return {
+  const options = {
     vault: ctx.vault,
+    ...(observed === undefined ? {} : { observed }),
     index: ctx.index,
     mode,
     query,
     strategy: strategyField(record),
     searches,
     collection: stringField(record, "collection"),
+    collectionPath: stringField(record, "collectionPath"),
     limit: numberField(record, "limit"),
     minScore: numberField(record, "minScore"),
     intent: stringField(record, "intent"),
@@ -196,6 +203,11 @@ function queryOptions(ctx: RouteContext, mode: SemanticSearchMode, body: unknown
     vec,
     hyde,
   };
+  if (observed !== undefined) {
+    try { normalizeQueryOptions(options); }
+    catch (error) { throw new HttpInputError(error instanceof Error ? error.message : String(error)); }
+  }
+  return options;
 }
 
 async function withRequestAdapter<T>(

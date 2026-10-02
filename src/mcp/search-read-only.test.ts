@@ -512,3 +512,47 @@ describe("doctor status read-only guarantee", () => {
     expect(diff(storeIndexed, await snapshotTree(storeDir))).toEqual([]);
   }, 180_000);
 });
+
+it("transports explicit observed discovery/filtering with zero hits and no vault writes", async () => {
+  const vault = await makeVault();
+  vaults.push(vault);
+  await writeFile(path.join(vault, "notes", "alpha.md"), "---\nsubject: [science, research]\n---\nretrieval needle\n");
+  const before = await snapshotTree(vault);
+  await withClient(vault, async client => {
+    const first = textPayload(await client.callTool({ name: "search", arguments: { op: "query", limit: 0, observed: { discover: { key: "subject", limit: 1 } } } }));
+    expect(first).toMatchObject({ available: true, hits: [], observed: { discovery: { values: [{ value: "research", count: 1 }] } } });
+    const cursor = (first["observed"] as { discovery: { cursor: string } }).discovery.cursor;
+    const second = textPayload(await client.callTool({ name: "search", arguments: { op: "query", limit: 0, observed: { discover: { key: "subject", limit: 1, cursor } } } }));
+    expect(second).toMatchObject({ available: true, observed: { discovery: { values: [{ value: "science", count: 1 }], cursor: null } } });
+    const filtered = textPayload(await client.callTool({ name: "search", arguments: { op: "query", query: "needle", candidateLimit: 1, observed: { field: { subject: "science" } } } }));
+    expect(filtered).toMatchObject({ available: true, totalCount: 1, hits: [{ path: "notes/alpha.md" }] });
+  });
+  expect(diff(before, await snapshotTree(vault))).toEqual([]);
+}, 120_000);
+
+it("copies JSON facet selections into MCP predicates with exact typed count/path round trips", async () => {
+  const vault = await makeVault();
+  const home = await mkdtemp(path.join(tmpdir(), "oms-exact-selection-home-"));
+  try {
+    for (const [name, value] of [["string", '"2026-01-01T00:00:00.000Z"'], ["number", "1767225600000"], ["boolean", "false"], ["boolean-string", '"false"']]) {
+      await writeFile(path.join(vault, "notes", `${name}.md`), `---\nwhen: ${value}\n---\nneedle\n`);
+    }
+    await writeFile(path.join(vault, "notes", "mixed.md"), '---\nwhen: ["2026-01-01T00:00:00.000Z", 1767225600000, false, "false"]\n---\nneedle\n');
+    const before = await snapshotTree(vault);
+    await withClient(vault, async client => {
+      const found = textPayload(await client.callTool({ name: "search", arguments: { op: "query", limit: 0, observed: { discover: { key: "when" } } } }));
+      const facets = (found["observed"] as { discovery: { values: { valueType: string; value: string | number | boolean; selection: unknown; count: number }[] } }).discovery.values;
+      expect(facets).toHaveLength(4);
+      for (const facet of facets) {
+        const selected = textPayload(await client.callTool({ name: "search", arguments: { op: "query", observed: { field: { when: facet.selection } } } }));
+        const leaf = facet.valueType === "string" ? facet.value === "false" ? "boolean-string" : "string" : facet.valueType;
+        expect((selected["hits"] as { path: string }[]).map(hit => hit.path).sort()).toEqual([`notes/${leaf}.md`, "notes/mixed.md"].sort());
+        expect(selected["totalCount"]).toBe(facet.count);
+      }
+    }, home);
+    expect(diff(before, await snapshotTree(vault))).toEqual([]);
+  } finally {
+    await rm(vault, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
+  }
+}, 120_000);

@@ -1,3 +1,4 @@
+import { normalizeQueryOptions } from "../../kernel/engine/mcp/query-mapper.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { deriveTemplateRetrievalAxes } from "../../kernel/engine/retrieval/axes.js";
 import { readSearchTemplateSource } from "../../kernel/engine/retrieval/template-source.js";
@@ -199,14 +200,16 @@ export async function handleSearch(ctx: ToolContext, publicName: string, name: s
     if (name === "oms_semantic_query") {
       const hasQueryAxes =
         isRecord(args?.["axes"]) ||
+        args?.["observed"] !== undefined ||
         args?.["folder"] !== undefined ||
         args?.["field"] !== undefined ||
         args?.["link"] !== undefined;
       if (hasQueryAxes) {
+        const axisOptions = semanticQueryOptionsFromArgs(vault, args);
+        if (axisOptions.observed !== undefined) normalizeQueryOptions(axisOptions);
         const axisAdapter = hasExplicitEmbeddingIntent(args)
           ? resolveReadOnlyIndexAdapter()
           : await resolveReadOnlyLexicalAdapter();
-        const axisOptions = semanticQueryOptionsFromArgs(vault, args);
         const axisResult = await new EngineSearchBackend(axisAdapter, vault).search({
           ...axisOptions,
           query: axisOptions.lex !== undefined ||

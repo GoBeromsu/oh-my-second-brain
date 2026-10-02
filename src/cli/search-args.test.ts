@@ -97,3 +97,23 @@ describe("search CLI explicit expansion", () => {
     expect(() => parseSearchArgs(argv)).toThrow(/pinned embedding strategy/);
   });
 });
+
+describe("CLI observed metadata object", () => {
+  it("keeps a facet-produced exact selector and rejects noncanonical dates", () => {
+    const observed = { field: { when: { exact: { valueType: "date", value: "2026-01-01T00:00:00.000Z" } } } };
+    expect(searchQueryOptions("query", "/vault", parseSearchArgs(["--observed", JSON.stringify(observed)]), "")).toMatchObject({ observed });
+    expect(() => searchQueryOptions("query", "/vault", parseSearchArgs(["--observed", '{"field":{"when":{"exact":{"valueType":"date","value":"2026-02-31T00:00:00.000Z"}}}}']), "")).toThrow("canonical ISO");
+  });
+  it("accepts explicit metadata-only discovery without changing declared fields", () => {
+    const observed = { field: { subject: { containsAll: ["science", "research"] } }, discover: { limit: 20 } };
+    const args = parseSearchArgs(["--observed", JSON.stringify(observed), "--field", "status=open", "--limit", "0"]);
+    expect(searchQueryOptions("query", "/vault", args, "")).toMatchObject({ observed, axes: { field: { status: "open" } }, limit: 0 });
+  });
+  it.each(["", " ", "not json", "null", "{}", '{"discover":{"limit":101}}'])("rejects invalid observed JSON %s", input => {
+    expect(() => searchQueryOptions("query", "/vault", parseSearchArgs(["--observed", input]), "")).toThrow();
+  });
+  it("rejects duplicate observed flags and expansion", () => {
+    expect(() => parseSearchArgs(["--observed", '{"discover":{}}', "--observed", '{"discover":{}}'])).toThrow("one JSON object");
+    expect(() => searchQueryOptions("query", "/vault", parseSearchArgs(["--observed", '{"discover":{}}', "--expand"]), "science")).toThrow("conflicts");
+  });
+});
