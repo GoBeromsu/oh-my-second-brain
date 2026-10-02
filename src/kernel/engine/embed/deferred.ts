@@ -75,6 +75,8 @@ export function makeDeferredStore(): EngineStore {
     );
   };
   return {
+    readDocumentSources: () => unavailable(),
+    recordDocumentSource: () => unavailable(),
     capabilities: () => ({ vecAvailable: false }),
     upsertLex: () => unavailable(),
     readEmbeddingIdentity: () => unavailable(),

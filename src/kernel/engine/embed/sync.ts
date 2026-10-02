@@ -19,9 +19,10 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { chunkDocument } from "./chunker.js";
+import { readDocumentSource } from "./source.js";
 import { capabilityGuidance } from "./config.js";
 import { requireRealEmbeddingProvider } from "./provider.js";
 import { openEngineStore, openEngineStoreCore } from "./store.js";
@@ -152,12 +153,12 @@ function isEnoent(error: unknown): boolean {
     (error as { code?: unknown }).code === "ENOENT";
 }
 
-export async function* walkMarkdown(dir: string, base: string): AsyncGenerator<string> {
+export async function* walkMarkdown(dir: string, base: string, options: { readonly strict?: boolean } = {}): AsyncGenerator<string> {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch (error) {
-    if (isEnoent(error)) return;
+    if (isEnoent(error) && options.strict !== true) return;
     throw new Error(`Unable to scan vault directory "${dir}": ${error instanceof Error ? error.message : String(error)}`, {
       cause: error,
     });
@@ -166,7 +167,7 @@ export async function* walkMarkdown(dir: string, base: string): AsyncGenerator<s
     if (isSkippedDirectory(entry.name)) continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      yield* walkMarkdown(fullPath, base);
+      yield* walkMarkdown(fullPath, base, options);
     } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
       yield path.relative(base, fullPath).replace(/\\/g, "/");
     }
@@ -209,7 +210,7 @@ async function* selectedMarkdownFiles(
   isExcluded: (path: string) => Promise<boolean>,
 ): AsyncGenerator<string> {
   if (files === undefined) {
-    for await (const relPath of walkMarkdown(collectionRoot, vault)) if (!(await isExcluded(relPath))) yield relPath;
+    for await (const relPath of walkMarkdown(collectionRoot, vault, { strict: true })) if (!(await isExcluded(relPath))) yield relPath;
     return;
   }
   for (const relPath of explicitMarkdownFiles(vault, collectionRelative, files)) {
@@ -476,7 +477,7 @@ interface SyncCounters {
   skipped: number;
 }
 
-async function syncDocument(opts: {
+interface SyncDocumentOptions {
   relPath: string;
   vault: string;
   store: EngineStore;
@@ -485,16 +486,25 @@ async function syncDocument(opts: {
   chunkerOpts: Partial<ChunkerOptions> | undefined;
   counters: SyncCounters;
   rebuildAllVectors: boolean;
-}): Promise<void> {
-  let content: string;
-  try {
-    content = await readFile(path.join(opts.vault, opts.relPath), "utf-8");
-  } catch {
-    return;
-  }
+}
 
+/** Reconcile only a complete scan's scope; explicit file slices never prune peers. */
+function reconcileIndexedDocuments(store: EngineStore, selected: ReadonlySet<string>, collectionRelative: string): void {
+  const known = new Set([...store.listDocPaths(), ...(store.readDocumentSources()?.keys() ?? [])]);
+  for (const docPath of known) {
+    if (isDocumentInCollection(docPath, collectionRelative) && !selected.has(docPath)) store.clearDocument(docPath);
+  }
+}
+
+async function syncDocument(opts: SyncDocumentOptions): Promise<void> {
+  const { content, source } = await readDocumentSource(opts.vault, opts.relPath, opts.chunkerOpts);
   opts.counters.scanned++;
-  const chunks: Chunk[] = chunkDocument(opts.relPath, content, opts.chunkerOpts);
+  const chunks = chunkDocument(opts.relPath, content, opts.chunkerOpts);
+  await syncDocumentChunks(opts, chunks);
+  opts.store.recordDocumentSource(opts.relPath, source, chunks);
+}
+
+async function syncDocumentChunks(opts: SyncDocumentOptions, chunks: Chunk[]): Promise<void> {
   const storedShas = opts.store.getShas(opts.relPath);
 
   const chunkCountChanged = storedShas.size !== chunks.length;
@@ -687,7 +697,8 @@ async function rebuildGenerationAtomically(opts: {
       throw new Error("Shadow embedding generation failed identity validation.");
     }
     const actualDocs = new Set(shadow.listDocPaths());
-    if (actualDocs.size !== expectedDocs.size || [...expectedDocs].some((doc) => !actualDocs.has(doc))) {
+    const sourceDocs = new Set(shadow.readDocumentSources()?.keys() ?? []);
+    if (sourceDocs.size !== expectedDocs.size || [...expectedDocs].some(doc => !sourceDocs.has(doc)) || [...actualDocs].some(doc => !expectedDocs.has(doc))) {
       throw new Error("Shadow embedding generation failed document validation.");
     }
 
@@ -804,6 +815,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
       warnings.push("embed=false: lexical index updated; no vectors generated");
 
       const counters: SyncCounters = { scanned: 0, added: 0, updated: 0, skipped: 0 };
+      const selectedPaths = new Set<string>();
       for await (const relPath of selectedMarkdownFiles(
         vault,
         collectionRoot,
@@ -811,6 +823,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
         opts.files,
         isExcluded,
       )) {
+        selectedPaths.add(relPath);
         await syncDocument({
           relPath,
           vault,
@@ -822,6 +835,8 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
           rebuildAllVectors: false,
         });
       }
+
+      if (opts.files === undefined) reconcileIndexedDocuments(store, selectedPaths, collectionRelative);
 
       return {
         available: true,
@@ -1029,6 +1044,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
     // scope so finally can conditionally close it, and TS does not preserve that
     // narrowing across async worker callbacks.
     const liveStore = store;
+    const selectedPaths = new Set<string>();
     const counters: SyncCounters = { scanned: 0, added: 0, updated: 0, skipped: 0 };
     const selected = selectedMarkdownFiles(
       vault,
@@ -1038,6 +1054,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
       isExcluded,
     );
     await syncEmbeddingDocuments(selected, provider, async (relPath) => {
+      selectedPaths.add(relPath);
       await syncDocument({
         relPath,
         vault,
@@ -1049,6 +1066,8 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
         rebuildAllVectors: false,
       });
     });
+
+    if (opts.files === undefined) reconcileIndexedDocuments(store, selectedPaths, collectionRelative);
 
     // Persist configured embedding identity only after a successful embed=true
     // incremental sync.

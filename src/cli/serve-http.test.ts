@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { syncEngineStore } from "../kernel/engine/embed/sync.js";
+import { readDocumentSource } from "../kernel/engine/embed/source.js";
+import { chunkDocument } from "../kernel/engine/embed/chunker.js";
 import { engineStorePath } from "../kernel/engine/paths.js";
 import { runServeHttp, type ServeHttpServer } from "./serve-http.js";
 import { createEngineSession } from "./engine-session.js";
@@ -128,23 +130,18 @@ describe("serve HTTP transport", () => {
         path.join(tmpVault, "references", "WAL Only.md"),
         "# WAL Only\n\nwalexclusive committed content.\n",
       );
+      const document = await readDocumentSource(tmpVault, "references/WAL Only.md");
+      const chunk = chunkDocument("references/WAL Only.md", document.content)[0]!;
       const insert = writer.transaction(() => {
         const result = writer.prepare(
           "INSERT INTO engine_chunk_meta (doc_path, ordinal, text, sha) VALUES (?, ?, ?, ?)",
-        ).run(
-          "references/WAL Only.md",
-          0,
-          "WAL Only walexclusive committed content",
-          "wal-only-sha",
-        );
+        ).run(chunk.docPath, chunk.ordinal, chunk.text, chunk.sha);
         writer.prepare(
           "INSERT INTO engine_chunk_fts (rowid, doc_path, ordinal, text) VALUES (?, ?, ?, ?)",
-        ).run(
-          Number(result.lastInsertRowid),
-          "references/WAL Only.md",
-          0,
-          "WAL Only walexclusive committed content",
-        );
+        ).run(Number(result.lastInsertRowid), chunk.docPath, chunk.ordinal, chunk.text);
+        writer.prepare(
+          "INSERT INTO engine_document_source (doc_path, version, fingerprint, content_sha256, chunker) VALUES (?, 1, ?, ?, ?)",
+        ).run(chunk.docPath, document.source.fingerprint, document.source.contentSha256, document.source.chunker);
       });
       insert();
       const before = await vaultSnapshot(tmpVault);

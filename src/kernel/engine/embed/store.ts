@@ -18,6 +18,7 @@ import {
   validateEmbeddingIdentity,
 } from "./identity.js";
 import { createEngineStoreReadSnapshot } from "./read-snapshot.js";
+import { createDocumentSourceAccess, DOCUMENT_SOURCE_SCHEMA, type DocumentSource } from "./source.js";
 
 export { ENGINE_EMBED_META_VERSION } from "./identity.js";
 
@@ -139,6 +140,12 @@ export interface EngineStore extends VectorStore {
 
   /** Delete all chunks (meta + vec + FTS) for `docPath`. */
   clearDocument(docPath: string): void;
+
+  /** Per-document source evidence; null for a legacy store without this table. */
+  readDocumentSources(): Map<string, DocumentSource> | null;
+
+  /** Publish evidence only if the expected chunk set is still current. */
+  recordDocumentSource(docPath: string, source: DocumentSource, expected: ReadonlyArray<Pick<Chunk, "ordinal" | "sha">>): void;
 
   /** Return every distinct `doc_path` currently stored. */
   listDocPaths(): string[];
@@ -347,6 +354,7 @@ function ensureCoreSchema(db: Database.Database): void {
       text
     );
   `);
+  db.exec(DOCUMENT_SOURCE_SCHEMA);
 }
 
 function vecTableExists(db: Database.Database): boolean {
@@ -401,6 +409,8 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
   } catch {
     // sqlite-vec unavailable or vec table absent — core-only mode still works.
   }
+
+  const sources = createDocumentSourceAccess(db);
 
   // Prepared statements — core only
   const stmtGetMeta = db.prepare<[string, number], { rowid: number; doc_path: string; ordinal: number; text: string; sha: string }>(
@@ -462,6 +472,7 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
 
   const doUpsertLex = db.transaction((rows: ReadonlyArray<Chunk>) => {
     for (const row of rows) {
+      sources.invalidate(row.docPath);
       const existing = stmtGetMeta.get(row.docPath, row.ordinal);
       if (existing) {
         const id = BigInt(existing.rowid);
@@ -478,12 +489,15 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
   });
 
   const doClearDocument = db.transaction((docPath: string) => {
+    sources.invalidate(docPath);
     stmtClearDocVec?.run(docPath);
     stmtClearDocFts.run(docPath);
     stmtClearDocMeta.run(docPath);
   });
 
   return {
+    readDocumentSources: sources.readDocumentSources,
+    recordDocumentSource: sources.recordDocumentSource,
     capabilities(): EngineStoreCapabilities {
       return { vecAvailable: false };
     },
@@ -701,7 +715,10 @@ export function openEngineStore(
       )
     : null;
 
+  const sources = createDocumentSourceAccess(db);
+
   const doClearDocument = db.transaction((docPath: string) => {
+    sources.invalidate(docPath);
     stmtClearDocVec?.run(docPath);
     stmtClearDocFts.run(docPath);
     stmtClearDocMeta.run(docPath);
@@ -709,6 +726,7 @@ export function openEngineStore(
 
   const doUpsertLex = db.transaction((rows: ReadonlyArray<Chunk>) => {
     for (const row of rows) {
+      sources.invalidate(row.docPath);
       const existing = stmtGetMeta.get(row.docPath, row.ordinal);
       if (existing) {
         const id = BigInt(existing.rowid);
@@ -732,6 +750,7 @@ export function openEngineStore(
       throw new Error("EngineStore: vector layer unavailable (sqlite-vec not loaded).");
     }
     for (const row of rows) {
+      sources.invalidate(row.docPath);
       const existing = stmtGetMeta.get(row.docPath, row.ordinal);
       if (existing) {
         const id = BigInt(existing.rowid);
@@ -750,6 +769,8 @@ export function openEngineStore(
   });
 
   return {
+    readDocumentSources: sources.readDocumentSources,
+    recordDocumentSource: sources.recordDocumentSource,
     capabilities(): EngineStoreCapabilities {
       return { vecAvailable };
     },
@@ -959,6 +980,7 @@ function openReadOnlyStore(
   const { db, dispose } = opened;
 
   try {
+  const sources = createDocumentSourceAccess(db, true);
   const stmtQueryLex = db.prepare<[string, number], { doc_path: string; ordinal: number; text: string; rank: number }>(
     `SELECT m.doc_path, m.ordinal, m.text, bm25(engine_chunk_fts) AS rank
      FROM engine_chunk_fts
@@ -1012,6 +1034,8 @@ function openReadOnlyStore(
   }
 
   return {
+    readDocumentSources: sources.readDocumentSources,
+    recordDocumentSource: sources.recordDocumentSource,
     capabilities(): EngineStoreCapabilities {
       return { vecAvailable: stmtQueryVec !== null };
     },

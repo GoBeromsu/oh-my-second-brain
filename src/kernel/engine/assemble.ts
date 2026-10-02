@@ -38,6 +38,7 @@ import {
 } from "./embed/store.js";
 import { makeEmbeddingIdentity } from "./embed/identity.js";
 import { syncEngineStore } from "./embed/sync.js";
+import { verifyIndexSources } from "./embed/freshness.js";
 import { McpEngineAdapter } from "./mcp/facade.js";
 import type { McpSemanticModelCapabilityStatus } from "./mcp/types.js";
 import { makeDeferredProvider, makeDeferredStore } from "./embed/deferred.js";
@@ -865,6 +866,7 @@ export function assembleCoreSemanticEngineReadOnly(config: AssembleConfig): Asse
     embeddingNormalization: config.embeddingNormalization,
     embeddingPrefixScheme: config.embeddingPrefixScheme,
     modelCapabilityStatus: modelCapabilityStatus(config),
+    verifyIndexSources: (selectedVault, collection) => verifyIndexSources(store, selectedVault, collection),
   }, reranker, false);
 
   return {
@@ -969,6 +971,7 @@ export function assembleEngineReadOnly(config: AssembleConfig): AssembledEngine 
     embeddingPrefixScheme: embedding.prefixScheme,
     modelCapabilityStatus: modelCapabilityStatus(config),
     dbPath,
+    verifyIndexSources: (selectedVault, collection) => verifyIndexSources(store, selectedVault, collection),
   }, reranker, false);
 
   return {
