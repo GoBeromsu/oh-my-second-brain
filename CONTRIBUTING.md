@@ -32,7 +32,8 @@ Keep implementation and contributor-facing documentation in the same change. The
 - `tsconfig.json` excludes `**/*.test.ts`; `npm run lint` does not typecheck tests. It does typecheck the shared helpers in `test/fixtures/*.ts` through `tsconfig.fixtures.json`. Run the focused Vitest test for test changes.
 - Released changelog sections are immutable. Add entries only to the unreleased section.
 - Pull-request CI runs changelog history, install, lint, build, test, and audit. Release verification runs on `oms-v*` tags in `.github/workflows/release.yml`, not per pull request.
-- Canonical-path capture and read-count fixtures resolve temporary roots before deriving expected paths. CI reruns the node-cache, live-lexical-read, and projection-diagnostic suites with a symlinked `TMPDIR`, so alias spellings cannot silently disable injection hooks or produce false read-count failures.
+- Canonical-path capture and read-count fixtures resolve temporary roots before deriving expected paths. CI reruns the node-cache, live-lexical-read/generation, projection-diagnostic, and maintenance suites with a symlinked `TMPDIR`, so alias spellings cannot silently disable injection hooks or produce false read-count failures.
+- Maintenance timing tests separate delivered watcher hints from a registered watcher that emits nothing. Injected callbacks and a fake clock verify debounce and the default periodic reconciliation independently; the real MCP owner/crash lifecycle does not assume OS event delivery within a shorter deadline.
 
 ### Documentation issue severity rubric
 

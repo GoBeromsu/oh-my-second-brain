@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -34,7 +34,7 @@ const OLD = "# Alpha\noldkeyword\n";
 const NEW = "# Alpha\nnewkeyword\n";
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), "oms-live-generation-"));
+  root = await realpath(await mkdtemp(path.join(tmpdir(), "oms-live-generation-")));
   vault = path.join(root, "vault");
   dbPath = path.join(root, "engine.sqlite");
   await mkdir(vault);

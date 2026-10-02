@@ -54,6 +54,9 @@ jobs:
           TMPDIR="$root/alias" npm test -- \
             src/kernel/engine/graph/node-cache.test.ts \
             src/kernel/engine/embed/live-lexical-reads.test.ts \
+            src/kernel/engine/embed/live-lexical-generation.test.ts \
+            src/kernel/engine/index-maintenance.test.ts \
+            src/mcp/maintenance-lifecycle.test.ts \
             src/kernel/engine/embed/live-projection-diagnostic.test.ts
       - run: npm run check:docs
       - name: Required R2 Phase D measurement gate (boost-c040)
