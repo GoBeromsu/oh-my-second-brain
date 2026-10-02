@@ -4,7 +4,7 @@ import { lstat, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeF
 import path from "node:path";
 import { mapWithConcurrency } from "../../conventions/vault-walk.js";
 import { fileMetadataWitness, readFileSnapshot } from "../../conventions/file-snapshot.js";
-import { parseNote } from "../../conventions/frontmatter.js";
+import { parseNote, type ParsedNote } from "../../conventions/frontmatter.js";
 import { managedSourceExclusionMatcher } from "../../conventions/note-exclude.js";
 import type { Digest } from "../../conventions/canonical.js";
 import { classifyNoteTemplateIdentity, deriveTemplateRetrievalAxes, type TemplateRetrievalAxes } from "../retrieval/axes.js";
@@ -121,8 +121,7 @@ async function graphPaths(vault: string, files: readonly string[] | undefined, m
   return files === undefined ? markdownPaths(vault, isExcluded, metadata) : explicitPaths(vault, files, isExcluded);
 }
 
-function parseDocument(raw: string): { readonly frontmatter: Record<string, unknown>; readonly body: string; readonly diagnostics: readonly string[] } {
-  const parsed = parseNote(raw);
+function parseDocument(raw: string, parsed: Readonly<ParsedNote> = parseNote(raw)): { readonly frontmatter: Record<string, unknown>; readonly body: string; readonly diagnostics: readonly string[] } {
   if (parsed.diagnostics.length === 0) return { frontmatter: parsed.frontmatter, body: parsed.body, diagnostics: [] };
   return {
     frontmatter: {},
@@ -378,8 +377,9 @@ function projectionDocument(doc: Pick<ParsedDoc, "docPath" | "raw" | "frontmatte
 }
 
 /** Parse captured bytes once; facets do not need retained lexical terms. */
-export function parseNodeProjectionDocument(docPath: string, raw: string, includeLexicalTerms = true): NodeProjectionDocument {
-  return projectionDocument({ docPath, raw, ...parseDocument(raw) }, includeLexicalTerms);
+export function parseNodeProjectionDocument(docPath: string, raw: string, includeLexicalTerms = true, parsed?: Readonly<ParsedNote>): NodeProjectionDocument {
+  // A caller sharing the same captured bytes may reuse their canonical parse.
+  return projectionDocument({ docPath, raw, ...parseDocument(raw, parsed) }, includeLexicalTerms);
 }
 
 /** Reuse one binding/axis/link projection for filesystem and live captured sources. */

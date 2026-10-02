@@ -7,7 +7,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { parseNote } from "../../conventions/frontmatter.js";
+import { parseNote, type ParsedNote } from "../../conventions/frontmatter.js";
 import { UNTITLED_DOCUMENT_TITLE } from "../types.js";
 import type { Chunk, ChunkerOptions } from "../types.js";
 
@@ -124,8 +124,7 @@ function firstHeadingTitle(body: string): string | undefined {
  * honest answer for a malformed document, and preferable to guessing from a
  * region that is not body text.
  */
-function documentTitle(rawText: string): string {
-  const parsed = parseNote(rawText);
+function documentTitle(parsed: Readonly<ParsedNote>): string {
   const declared = parsed.frontmatter["title"];
   if (typeof declared === "string" && declared.trim() !== "") return declared.trim();
   return firstHeadingTitle(parsed.body) ?? UNTITLED_DOCUMENT_TITLE;
@@ -165,6 +164,8 @@ export function chunkDocument(
   docPath: string,
   rawText: string,
   opts: Partial<ChunkerOptions> = {},
+  // Internal captured-source reuse: this must be the parsing of rawText itself.
+  parsed: Readonly<ParsedNote> = parseNote(rawText),
 ): Chunk[] {
   const maxTokens = opts.maxTokens ?? DEFAULT_MAX_TOKENS;
   const overlapRatio = opts.overlapRatio ?? DEFAULT_OVERLAP_RATIO;
@@ -173,7 +174,7 @@ export function chunkDocument(
 
   const lines = rawText.split("\n");
   const chunks: Chunk[] = [];
-  const title = documentTitle(rawText);
+  const title = documentTitle(parsed);
   let ordinal = 0;
   let buffer: string[] = [];
   let lineWeights: number[] = [];

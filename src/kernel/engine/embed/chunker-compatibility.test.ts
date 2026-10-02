@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import { chunkDocument } from "./chunker.js";
+import { parseNote } from "../../conventions/frontmatter.js";
 
 // BEGIN COMPATIBILITY INPUTS
 const documents = [
@@ -23,8 +24,13 @@ it("preserves canonical chunks and digests across line, Unicode and overlap boun
   // Golden output from pre-optimization #205, tree 95783f5. It covers every
   // chunk's exact text, title, heading path, ordinal and digest in 150 cases.
   const digest = createHash("sha256");
+  const sharedDigest = createHash("sha256");
   for (const [index, raw] of documents.entries()) {
-    for (const opts of options) digest.update(JSON.stringify(chunkDocument(`case-${index}.md`, raw, opts)));
+    for (const opts of options) {
+      digest.update(JSON.stringify(chunkDocument(`case-${index}.md`, raw, opts)));
+      sharedDigest.update(JSON.stringify(chunkDocument(`case-${index}.md`, raw, opts, parseNote(raw))));
+    }
   }
   expect(digest.digest("hex")).toBe("eb571cc94b1db38afc6c5602e2b181ef3cd643fe3371df2be0dee03e079923db");
+  expect(sharedDigest.digest("hex")).toBe("eb571cc94b1db38afc6c5602e2b181ef3cd643fe3371df2be0dee03e079923db");
 });
