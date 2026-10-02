@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
@@ -62,8 +62,8 @@ it("measures dense warm/one-edit stages without rereading overflow bodies", asyn
   const suppliedVault = process.env.OMS_LIVE_PROJECTION_DIAGNOSTIC_VAULT;
   let count = Number(process.env.OMS_LIVE_PROJECTION_DIAGNOSTIC_COUNT ?? 256);
   if (!Number.isSafeInteger(count) || count < 20 || count > 20_000) throw new Error("Diagnostic count must be between 20 and 20000.");
-  const root = await mkdtemp(path.join(tmpdir(), "oms-projection-diagnostic-"));
-  const vault = suppliedVault === undefined ? path.join(root, "vault") : path.resolve(suppliedVault);
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "oms-projection-diagnostic-")));
+  const vault = suppliedVault === undefined ? path.join(root, "vault") : await realpath(suppliedVault);
   if (suppliedVault === undefined) await mkdir(vault);
   else count = (await scanIndexSources(vault)).files.size;
   const raw = (index: number) => `---\nsubject: ${index % 20 === 0 ? "[science, research]" : "general"}\nscore: ${index}\nenabled: ${index % 2 === 0}\ncreated: 2026-01-${String(index % 28 + 1).padStart(2, "0")}\ntags: [synthetic, group-${index % 100}, category-${index % 12}]\nunique: value-${index}\n${Array.from({ length: 16 }, (_, key) => `wide_${key}: ${String(index).padStart(5, "0")}-${key}-${"a".repeat(128)}`).join("\n")}\n---\nneedle synthetic material for note ${index}. No personal data.\n`;

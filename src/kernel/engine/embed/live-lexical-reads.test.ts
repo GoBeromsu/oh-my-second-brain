@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -34,7 +34,7 @@ let directory: string;
 let vault: string;
 let dbPath: string;
 beforeEach(async () => {
-  directory = await mkdtemp(path.join(tmpdir(), "oms-live-reads-"));
+  directory = await realpath(await mkdtemp(path.join(tmpdir(), "oms-live-reads-")));
   vault = path.join(directory, "vault");
   dbPath = path.join(directory, "index.sqlite");
   await mkdir(vault);

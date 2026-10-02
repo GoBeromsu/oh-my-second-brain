@@ -70,7 +70,8 @@ const clearReads = () => { observed.reads = []; readFile.mockClear(); };
 beforeEach(async () => {
   observed.reads = []; observed.afterRead = undefined; observed.weak = undefined;
   observed.activeHandles = 0; observed.peakHandles = 0;
-  vault = await fs.mkdtemp(path.join(tmpdir(), "oms-node-witness-"));
+  // Capture hooks compare the canonical paths used by confined source reads.
+  vault = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "oms-node-witness-")));
   cache = path.join(vault, ".cache", "nodes.json");
   note = path.join(vault, "a.md");
   await fs.writeFile(note, "alpha");
