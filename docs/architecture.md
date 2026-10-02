@@ -71,6 +71,8 @@ After the live lexical corpus spills to disk, changed documents enter a bounded 
 
 Read-only SQLite access captures the main database and WAL twice and requires matching byte digests and file identity before opening the disposable copy. The first pass streams into private temporary files; the second pass hashes through the same 1 MiB buffer. Source SQLite handles are never opened, source bytes and sidecars are not changed, and a failed capture closes all descriptors and removes the temporary copy. This bounds JavaScript capture buffers independently of index size; it does not claim a bound on SQLite caches or the rest of the process.
 
+Detached reconciliation reads the stored chunk set before updating it. When that set is empty, it skips the redundant clear: an FTS virtual-table delete can flush pending terms even when it matches no rows. New notes therefore retain the bounded transaction's native batching. A nonempty stored set is still cleared when its chunk count changes, and source evidence is published only after exact chunk verification in the same transaction.
+
 ## Public surfaces
 
 The CLI does not require a host. The three public sets stay independent:

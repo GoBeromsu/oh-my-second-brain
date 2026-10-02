@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Detached lexical reconciliation skips clearing a document whose stored chunk set is already empty. Empty FTS deletes flush pending terms even without matching rows; avoiding them lets fresh notes share the intended bounded native batch while preserving existing-note cleanup and rollback.
+
 - Live lexical capture groups disk-backed document updates into bounded synchronous transactions. The queue owns serialized chunks and source evidence, including title/heading metadata, and flushes residual records before retrieval. Dedicated reconciliation reuses its outer rollback boundary without redundant FTS savepoints; ordinary store methods retain independent atomicity. In-memory capture still commits and checks the spill budget one document at a time.
 
 - Detached live lexical captures update each note's chunks and verified source evidence in one synchronous private transaction, reducing separate commits during cold corpus construction. A failed source publication rolls back that note's lexical changes. Persistent stores, SQLite durability settings, native ranking, memory budgets and final source validation keep their existing behavior.

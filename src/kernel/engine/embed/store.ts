@@ -1263,7 +1263,9 @@ function detachedHandle(db: Database.Database): DetachedLexicalStore {
     try {
       const expected = store.getShas(docPath);
       if (expected.size !== chunks.length) {
-        store.clearDocument(docPath);
+        // Even an empty virtual-table DELETE flushes pending FTS terms. A
+        // proven absent chunk set needs no clear and can stay in this batch.
+        if (expected.size > 0) store.clearDocument(docPath);
         store.upsertLex(chunks);
       } else {
         const changed = chunks.filter(chunk => expected.get(chunk.ordinal) !== chunk.sha);
