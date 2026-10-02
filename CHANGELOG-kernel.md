@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Live lexical capture groups disk-backed document updates into bounded synchronous transactions. The queue owns serialized chunks and source evidence, including title/heading metadata, and flushes residual records before retrieval. Dedicated reconciliation reuses its outer rollback boundary without redundant FTS savepoints; ordinary store methods retain independent atomicity. In-memory capture still commits and checks the spill budget one document at a time.
+
 - Detached live lexical captures update each note's chunks and verified source evidence in one synchronous private transaction, reducing separate commits during cold corpus construction. A failed source publication rolls back that note's lexical changes. Persistent stores, SQLite durability settings, native ranking, memory budgets and final source validation keep their existing behavior.
 
 - Live lexical capture shares one canonical frontmatter parse between its compact metadata projection and chunk title extraction. Malformed metadata diagnostics, title fallback, raw embedding text and copied projection values keep their existing semantics; unchanged warm notes still skip parsing.

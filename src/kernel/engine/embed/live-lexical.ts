@@ -19,6 +19,7 @@ import { scanIndexSources, type IndexSourceSnapshot } from "./freshness.js";
 import { chunkDocument } from "./chunker.js";
 import { readDocumentSource, type DocumentSource } from "./source.js";
 import { openDetachedLexicalStore, type DetachedLexicalStore, type EngineStore } from "./store.js";
+import { LexicalDocumentBatch } from "./lexical-batch.js";
 
 /** Retained SQLite pages, not a claim about peak RSS while reading a large file. */
 export const LIVE_LEXICAL_MEMORY_BYTES = 128 * 1024 * 1024;
@@ -303,6 +304,14 @@ export class LiveLexicalSession {
     this.observations?.pruneLiveProjections(snapshot.files);
     const files = new Map(snapshot.files);
     const contentSha256 = new Map<string, string>();
+    const publish = (docPath: string, source: DocumentSource) => {
+      files.set(docPath, source.fingerprint === null ? `bytes:${source.contentSha256}` : `metadata:${source.fingerprint}`);
+      contentSha256.set(docPath, source.contentSha256);
+    };
+    const batch = new LexicalDocumentBatch(documents => {
+      this.current!.reconcileDocuments(documents);
+      for (const { docPath, source } of documents) publish(docPath, source);
+    });
     const captured = await mapWithConcurrency([...snapshot.files], 32, async ([docPath, fingerprint]): Promise<
       { readonly document: NodeProjectionDocument } | { readonly error: unknown }
     > => {
@@ -330,19 +339,23 @@ export class LiveLexicalSession {
         const document = parseNodeProjectionDocument(docPath, current.content, false, parsed);
         this.rememberProjection(docPath, current.source.contentSha256, document);
         const chunks = chunkDocument(docPath, current.content, undefined, parsed);
-        this.current!.reconcileDocument(docPath, current.source, chunks);
-        files.set(docPath, current.source.fingerprint === null
-          ? `bytes:${current.source.contentSha256}` : `metadata:${current.source.fingerprint}`);
-        contentSha256.set(docPath, current.source.contentSha256);
-        this.enforceBudget();
+        if (this.onDisk) batch.add({ docPath, source: current.source, chunks });
+        else {
+          // Pending FTS pages are not fully counted before commit. Preserve one
+          // complete document per in-memory budget check; batch only after spill.
+          this.current!.reconcileDocument(docPath, current.source, chunks);
+          publish(docPath, current.source);
+          this.enforceBudget();
+        }
         return { document };
       } catch (error) { return { error }; }
     });
     const documents: NodeProjectionDocument[] = [];
     for (const result of captured) {
-      if ("error" in result) throw result.error;
+      if ("error" in result) { batch.discard(); throw result.error; }
       documents.push(result.document);
     }
+    batch.flush();
     this.enforceBudget();
     if (identity !== vaultIdentity(this.vault) || snapshot.vault !== realpathSync(this.vault)) {
       throw new Error("LIVE_LEXICAL_SOURCE_CHANGED: the vault identity changed while capturing it; retry the search.");

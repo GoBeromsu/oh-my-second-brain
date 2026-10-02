@@ -39,7 +39,7 @@ function decodeSource(row: SourceRow): DocumentSource {
   return { fingerprint: row.fingerprint, contentSha256: row.content_sha256, chunker: row.chunker };
 }
 
-export function createDocumentSourceAccess(db: Database.Database, readonly = false) {
+export function createDocumentSourceAccess(db: Database.Database, readonly = false, reuseOuterTransaction: () => boolean = () => false) {
   const present = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'engine_document_source'").get() !== undefined;
   const read = present ? db.prepare<[], SourceRow>("SELECT doc_path, version, fingerprint, content_sha256, chunker FROM engine_document_source") : null;
   const readOne = present ? db.prepare<[string], SourceRow>("SELECT doc_path, version, fingerprint, content_sha256, chunker FROM engine_document_source WHERE doc_path = ?") : null;
@@ -48,7 +48,7 @@ export function createDocumentSourceAccess(db: Database.Database, readonly = fal
     "INSERT OR REPLACE INTO engine_document_source (doc_path, version, fingerprint, content_sha256, chunker) VALUES (?, 1, ?, ?, ?)",
   ) : null;
   const chunks = !readonly ? db.prepare<[string], { ordinal: number; sha: string }>("SELECT ordinal, sha FROM engine_chunk_meta WHERE doc_path = ? ORDER BY ordinal") : null;
-  const record = db.transaction((docPath: string, source: DocumentSource, expected: ReadonlyArray<Pick<Chunk, "ordinal" | "sha">>) => {
+  const recordBody = (docPath: string, source: DocumentSource, expected: ReadonlyArray<Pick<Chunk, "ordinal" | "sha">>) => {
     if (insert === null || chunks === null) throw new Error("EngineStore: recordDocumentSource is unavailable because this store was opened for reading only.");
     if ((source.fingerprint !== null && !DIGEST.test(source.fingerprint)) || !DIGEST.test(source.contentSha256) || source.chunker.length === 0) throw new Error("Engine document source evidence is invalid.");
     const actual = chunks.all(docPath);
@@ -57,7 +57,8 @@ export function createDocumentSourceAccess(db: Database.Database, readonly = fal
       throw new Error("Engine document chunks changed before source evidence could be published. Retry synchronization.");
     }
     insert.run(docPath, source.fingerprint, source.contentSha256, source.chunker);
-  });
+  };
+  const record = db.transaction(recordBody);
   return {
     invalidate(docPath: string): void { remove?.run(docPath); },
     readDocumentSources(): Map<string, DocumentSource> | null {
@@ -69,7 +70,8 @@ export function createDocumentSourceAccess(db: Database.Database, readonly = fal
       return row === undefined ? null : decodeSource(row);
     },
     recordDocumentSource(docPath: string, source: DocumentSource, expected: ReadonlyArray<Pick<Chunk, "ordinal" | "sha">>): void {
-      record(docPath, source, expected);
+      if (reuseOuterTransaction() && db.inTransaction) recordBody(docPath, source, expected);
+      else record(docPath, source, expected);
     },
   };
 }
