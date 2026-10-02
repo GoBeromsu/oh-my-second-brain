@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Chunking counts each line's script-aware token weight once and carries the exact weight through overlap, avoiding repeated scans of growing buffers on short-line notes. Canonical chunk text, title, heading paths, ordinals and digests remain unchanged; cold live search still captures the full corpus and performs its existing freshness checks.
+
 - Automatic maintenance ignores excluded editor housekeeping watch hints while retaining known exclusion settings and their directory replacements. Uppercase Markdown hints remain incremental, and unsafe or uncertain paths still request complete reconciliation.
 
 - Automatic full maintenance only loads an already installed native embedding backend; missing binaries fail with setup guidance instead of downloading or building llama.cpp in the background. Explicit provider callers retain their existing policy.

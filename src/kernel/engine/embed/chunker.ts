@@ -19,7 +19,7 @@ const DEFAULT_OVERLAP_RATIO = 0.15;
 // ---------------------------------------------------------------------------
 
 /**
- * Approximate token count, script-aware.
+ * Quarter-token weight for the approximate token count, script-aware.
  *
  * The naive `length / 4` heuristic holds for English/Latin text but drastically
  * UNDER-counts CJK (Korean, Chinese, Japanese): EmbeddingGemma tokenises those
@@ -29,12 +29,13 @@ const DEFAULT_OVERLAP_RATIO = 0.15;
  * all other characters at ~0.25 (the 4-chars/token Latin rate). This keeps
  * mixed Korean/English chunks safely under the embedding context window.
  */
-function approxTokens(text: string): number {
+function tokenWeight(text: string): number {
   let weighted = 0;
   for (const ch of text) {
-    weighted += isCjk(ch.codePointAt(0)!) ? 1 : 0.25;
+    weighted += isCjk(ch.codePointAt(0)!) ? 4 : 1;
   }
-  return Math.ceil(weighted);
+  // Integer quarter-token units preserve the old ceil(weighted / 4) budget.
+  return weighted;
 }
 
 /** True for CJK / Hangul / Kana / fullwidth codepoints (~1 token per char). */
@@ -175,12 +176,16 @@ export function chunkDocument(
   const title = documentTitle(rawText);
   let ordinal = 0;
   let buffer: string[] = [];
+  let lineWeights: number[] = [];
+  let bufferWeight = 0;
   let headingPath: string[] = [];
 
   const flush = (): void => {
     const text = buffer.join("\n").trim();
     if (!text) {
       buffer = [];
+      lineWeights = [];
+      bufferWeight = 0;
       return;
     }
     chunks.push({
@@ -192,7 +197,13 @@ export function chunkDocument(
       sha: chunkDigest(title, text),
     });
     // Carry the last N lines as overlap into the next chunk
-    buffer = buffer.slice(-overlapLineCount);
+    const retained = buffer.slice(-overlapLineCount);
+    const removed = buffer.length - retained.length;
+    // Each discarded line and its following newline leave the running weight
+    // once. Retained overlap keeps its original weight without rescanning text.
+    for (let index = 0; index < removed; index++) bufferWeight -= lineWeights[index]! + 1;
+    buffer = retained;
+    lineWeights = lineWeights.slice(-overlapLineCount);
   };
 
   for (const line of lines) {
@@ -204,9 +215,13 @@ export function chunkDocument(
       headingPath = applyHeading(headingPath, level, title);
     }
 
+    const weight = tokenWeight(line);
+    if (buffer.length > 0) bufferWeight += 1; // The join separator is one quarter-token.
     buffer.push(line);
+    lineWeights.push(weight);
+    bufferWeight += weight;
 
-    if (approxTokens(buffer.join("\n")) >= maxTokens) {
+    if (Math.ceil(bufferWeight / 4) >= maxTokens) {
       flush();
     }
   }
