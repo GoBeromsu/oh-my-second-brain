@@ -3,6 +3,7 @@ export { normalizeAxisValue, type AxisValue, type AxisValueType } from "./values
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { deserialize, serialize } from "node:v8";
 import Database from "better-sqlite3";
 import { parseNote } from "../../conventions/frontmatter.js";
 import { toAxisScalars } from "../graph/node.js";
@@ -13,6 +14,7 @@ import { discoverObserved, type ObservedDiscoveryOptions, type ObservedDiscovery
 export type { ObservedDiscoveryOptions, ObservedDiscoveryResult } from "./observed-discovery.js";
 import { engineAxisCachePath } from "../paths.js";
 import { managedSourceExclusionMatcher } from "../../conventions/note-exclude.js";
+import type { NodeProjectionDocument } from "../graph/builder.js";
 
 export type AxisKind = "folder" | "field" | "link";
 
@@ -147,6 +149,28 @@ const CREATE_SCHEMA = `
   );
 `;
 
+// Private live-session backing only, never normalized/reconstructed from EAV.
+// Bump when the compact projection contract or its interpretation changes.
+const LIVE_PROJECTION_VERSION = 1;
+const CREATE_LIVE_PROJECTION_SCHEMA = `
+  CREATE TABLE live_projection (
+    note_path TEXT PRIMARY KEY,
+    content_sha256 TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    document BLOB NOT NULL
+  );
+`;
+
+function isLiveProjection(value: unknown, notePath: string): value is NodeProjectionDocument {
+  if (value === null || typeof value !== "object") return false;
+  const document = value as Partial<NodeProjectionDocument>;
+  const strings = (items: unknown): boolean => Array.isArray(items) && items.every(item => typeof item === "string");
+  return document.docPath === notePath && document.frontmatter !== null && typeof document.frontmatter === "object"
+    && !Array.isArray(document.frontmatter) && strings(document.diagnostics) && strings(document.links)
+    && strings(document.lexicalTerms) && typeof document.bodyPreview === "string"
+    && Number.isSafeInteger(document.retainedBytes) && document.retainedBytes! >= 0;
+}
+
 /** Dedicated EAV repository; never shares the embedding engine database. */
 export class AxisObservationStore {
   readonly dbPath: string;
@@ -157,6 +181,7 @@ export class AxisObservationStore {
   private observationVersion = 0;
   private observedSnapshotReady = false;
   private observedSnapshotStorage: boolean;
+  private liveProjectionStorage = false;
   private observedSources = new Map<string, string>();
   private observedDiagnostics: ObservedMetadataDiagnostics = { malformedNotes: 0, unsupportedFields: 0 };
 
@@ -199,6 +224,47 @@ export class AxisObservationStore {
 
   private ensureOpen(): void {
     if (this.closed) throw new Error("Axis observation store is closed.");
+  }
+
+  /** Preserve the original compact projection, including cycles, Date and UTF-16. */
+  replaceLiveProjection(document: NodeProjectionDocument, contentSha256: string): void {
+    this.ensureOpen();
+    if (!this.observedSnapshotStorage) throw new Error("Live projections require an in-memory or session-private ephemeral axis store.");
+    if (!this.liveProjectionStorage) {
+      this.db.exec(CREATE_LIVE_PROJECTION_SCHEMA);
+      this.liveProjectionStorage = true;
+    }
+    this.db.prepare(`INSERT INTO live_projection (note_path, content_sha256, version, document) VALUES (?, ?, ?, ?)
+      ON CONFLICT(note_path) DO UPDATE SET content_sha256 = excluded.content_sha256, version = excluded.version, document = excluded.document`)
+      .run(document.docPath, contentSha256, LIVE_PROJECTION_VERSION, serialize(document));
+  }
+
+  /** A missing, incompatible or damaged row is a recapture, never a missing note. */
+  readLiveProjection(notePath: string, contentSha256: string): NodeProjectionDocument | undefined {
+    this.ensureOpen();
+    if (!this.liveProjectionStorage) return undefined;
+    const row = this.db.prepare("SELECT document FROM live_projection WHERE note_path = ? AND content_sha256 = ? AND version = ?")
+      .get(notePath, contentSha256, LIVE_PROJECTION_VERSION) as { document: Buffer } | undefined;
+    if (row === undefined) return undefined;
+    try {
+      const document: unknown = deserialize(row.document);
+      return isLiveProjection(document, notePath) ? document : undefined;
+    } catch { return undefined; }
+  }
+
+  deleteLiveProjection(notePath: string): void {
+    this.ensureOpen();
+    if (this.liveProjectionStorage) this.db.prepare("DELETE FROM live_projection WHERE note_path = ?").run(notePath);
+  }
+
+  /** Backing only; canonical EAV stays at its last explicitly reconciled snapshot. */
+  pruneLiveProjections(includedPaths: ReadonlyMap<string, unknown>): void {
+    this.ensureOpen();
+    if (!this.liveProjectionStorage) return;
+    const rows = this.db.prepare("SELECT note_path FROM live_projection").all() as Array<{ note_path: string }>;
+    this.runInTransaction(() => {
+      for (const row of rows) if (!includedPaths.has(row.note_path)) this.deleteLiveProjection(row.note_path);
+    });
   }
 
   /**
@@ -354,7 +420,10 @@ export class AxisObservationStore {
   /** Delete stale observations when a markdown note is removed. */
   deleteNote(notePath: string): void {
     this.ensureOpen();
-    this.db.prepare("DELETE FROM axis_observation WHERE note_path = ?").run(notePath);
+    this.runInTransaction(() => {
+      this.db.prepare("DELETE FROM axis_observation WHERE note_path = ?").run(notePath);
+      this.deleteLiveProjection(notePath);
+    });
     this.observationVersion++;
     this.observedSnapshotReady = false;
   }
@@ -438,6 +507,7 @@ export class AxisObservationStore {
     this.db.prepare("VACUUM INTO ?").run(destination);
     const copied = new AxisObservationStore(destination);
     copied.observedSnapshotStorage = true;
+    copied.liveProjectionStorage = this.liveProjectionStorage;
     copied.observedSources = new Map(this.observedSources);
     copied.observedDiagnostics = this.observedDiagnostics;
     copied.observedSnapshotReady = this.observedSnapshotReady;

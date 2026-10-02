@@ -5,6 +5,9 @@ Domain logic changes belong here.
 ## [Unreleased]
 
 - Observed value facets include a directly reusable, JSON-safe exact typed selection. Selecting a date, date-looking string, numeric timestamp, boolean or string now reproduces its distinct-note count within an unchanged discovery scope, without changing declared-axis or legacy comparison behavior. Exact date selectors require canonical ISO strings rather than permissive date coercion.
+- Ordinary live refresh prunes obsolete projection backing without invalidating unchanged observed-field rows. The next explicit observed query removes deleted/excluded canonical metadata and adds renamed notes through the existing authoritative snapshot reconciliation, avoiding a whole-corpus EAV rewrite while retaining cursor invalidation and current-source checks.
+
+- Live lexical projection overflow now reuses the original compact parsed document from versioned binary rows in the existing session-private axis store. Unchanged notes beyond the object-cache budget no longer require repeated body reads or YAML parsing; edits and missing/incompatible rows are recaptured, deleted/excluded rows are removed, and ordinary declared-axis/facet behavior remains unchanged. The same private spill owner bounds retained SQLite pages and cleans up failed refreshes after readers drain.
 
 - Explicit observed frontmatter queries now filter the same current-byte native FTS snapshot before candidate limits. Scalar/list predicates, bounded key/value discovery, cross-session cursors, and source-race rejection work without a sealed field declaration; existing declared axes retain their semantics. Dense observations spill the existing EAV repository to disposable session-private storage, never a new persistent index.
 

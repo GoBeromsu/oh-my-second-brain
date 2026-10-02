@@ -52,9 +52,9 @@ export interface LiveLexicalOptions {
   readonly dbPath?: string;
   /** Test/embedding seam; oversized corpora spill into a disposable temp store. */
   readonly maxMemoryBytes?: number;
-  /** Compact parsed fields/links only; excess entries are rebuilt on demand. */
+  /** Compact parsed fields/links only; excess entries use the private axis store. */
   readonly maxProjectionBytes?: number;
-  /** Explicit observed queries alone allocate this EAV snapshot; excess pages spill privately. */
+  /** Combined private backing/EAV page budget; canonical EAV rows stay observed-only. */
   readonly maxObservedBytes?: number;
 }
 
@@ -230,8 +230,15 @@ export class LiveLexicalSession {
   private rememberProjection(docPath: string, sha: string, document: NodeProjectionDocument): void {
     this.dropProjection(docPath);
     // Stable admission avoids an LRU rotation rereading the whole vault on each
-    // query. Oversized/excess documents are transiently projected, never omitted.
-    if (this.projectionBytes + document.retainedBytes > this.maxProjectionBytes) return;
+    // query. Oversized/excess documents are backed privately, never omitted or
+    // admitted to the object cache by deserialization on subsequent requests.
+    if (this.projectionBytes + document.retainedBytes > this.maxProjectionBytes) {
+      this.observations ??= new AxisObservationStore(":memory:");
+      this.observations.replaceLiveProjection(document, sha);
+      this.enforceObservedBudget();
+      return;
+    }
+    this.observations?.deleteLiveProjection(docPath);
     this.projections.set(docPath, { sha, document });
     this.projectionBytes += document.retainedBytes;
   }
@@ -239,6 +246,9 @@ export class LiveLexicalSession {
   private async refresh(): Promise<RefreshedLexicalSource> {
     try { return await this.refreshSources(); }
     catch (error) {
+      // All source workers have drained before this cleanup. Other workers may
+      // have repopulated backing storage after the first failed spill.
+      this.releaseObserved();
       // Failed spilling must not leave an oversized memory cache that a later
       // metadata-only fast path can silently reuse. Readers have drained here.
       if (this.current !== undefined && !this.onDisk && this.current.allocatedBytes() > this.maxMemoryBytes) {
@@ -260,9 +270,15 @@ export class LiveLexicalSession {
     // listDocPaths omits zero-chunk documents, so source evidence participates too.
     const storedPaths = new Set([...this.current!.store.listDocPaths(), ...sources.keys()]);
     for (const docPath of storedPaths) {
-      if (!snapshot.files.has(docPath)) this.current!.store.clearDocument(docPath);
+      if (!snapshot.files.has(docPath)) {
+        this.current!.store.clearDocument(docPath);
+        // Ordinary refresh prunes backing only. The next observed selector
+        // authoritatively reconciles EAV without invalidating unchanged rows.
+        this.observations?.deleteLiveProjection(docPath);
+      }
     }
     for (const docPath of this.projections.keys()) if (!snapshot.files.has(docPath)) this.dropProjection(docPath);
+    this.observations?.pruneLiveProjections(snapshot.files);
     const files = new Map(snapshot.files);
     const contentSha256 = new Map<string, string>();
     const captured = await mapWithConcurrency([...snapshot.files], 32, async ([docPath, fingerprint]): Promise<
@@ -279,9 +295,13 @@ export class LiveLexicalSession {
         );
         // Byte-mode inventory already captured and hashed the current source; it
         // can reuse the parsed projection without a redundant second body capture.
-        if (sameBytes && source !== undefined && source.chunker === CHUNKER && projection?.sha === source.contentSha256) {
-          contentSha256.set(docPath, source.contentSha256);
-          return { document: projection.document };
+        if (sameBytes && source !== undefined && source.chunker === CHUNKER) {
+          const document = projection?.sha === source.contentSha256 ? projection.document
+            : this.observations?.readLiveProjection(docPath, source.contentSha256);
+          if (document !== undefined) {
+            contentSha256.set(docPath, source.contentSha256);
+            return { document };
+          }
         }
         const current = await readDocumentSource(snapshot.vault, docPath);
         const document = parseNodeProjectionDocument(docPath, current.content, false);
