@@ -7,6 +7,8 @@ import type {
   SemanticTypedSearch,
 } from "../kernel/search/semantic-contract.js";
 import type { McpSemanticExpandStrategy } from "../kernel/engine/mcp/types.js";
+import { LiveLexicalSession } from "../kernel/engine/embed/live-lexical.js";
+import { requiresEmbeddings } from "../kernel/searchbackend/engine-search-backend.js";
 import { createEngineSession } from "./engine-session.js";
 
 export interface ServeHttpServer {
@@ -29,6 +31,7 @@ export interface ServeHttpOptions {
 
 interface RouteContext {
   readonly vault: string;
+  readonly lexicalSession?: LiveLexicalSession;
   readonly index?: string;
   readonly adapter?: McpEngineAdapter;
   readonly modelCacheDir?: string;
@@ -198,10 +201,12 @@ function queryOptions(ctx: RouteContext, mode: SemanticSearchMode, body: unknown
 async function withRequestAdapter<T>(
   ctx: RouteContext,
   operation: (adapter: McpEngineAdapter) => Promise<T>,
+  liveLexical = false,
 ): Promise<T> {
   if (ctx.adapter !== undefined) return operation(ctx.adapter);
   const session = createEngineSession(ctx.vault, {
     write: false,
+    ...(liveLexical && ctx.lexicalSession !== undefined ? { liveLexical: ctx.lexicalSession } : {}),
     modelCacheDir: ctx.modelCacheDir,
     modelEnv: ctx.modelEnv,
   });
@@ -244,6 +249,7 @@ async function routeRequest(ctx: RouteContext, request: IncomingMessage, respons
       sendJson(response, 200, await withRequestAdapter(
         ctx,
         (adapter) => adapter.semanticQuery(options),
+        !requiresEmbeddings(options),
       ));
       return;
     }
@@ -298,8 +304,8 @@ export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpSer
   const host = safeHost(opts.host);
   const port = opts.port ?? 8765;
   // Verify the normal engine path before listening, then release its immutable
-  // snapshot. Each request acquires a fresh read-only snapshot so external index
-  // syncs become visible without sharing or disposing another request's engine.
+  // snapshot. Vector/status requests retain request-owned persistent snapshots;
+  // lexical queries use the generation-aware detached session created below.
   if (opts.adapter === undefined) {
     const readiness = createEngineSession(opts.vault, {
       write: false,
@@ -308,8 +314,10 @@ export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpSer
     });
     await readiness.dispose();
   }
+  const lexicalSession = opts.adapter === undefined ? new LiveLexicalSession({ vault: opts.vault }) : undefined;
   const ctx: RouteContext = {
     vault: opts.vault,
+    lexicalSession,
     index: opts.index,
     adapter: opts.adapter,
     modelCacheDir: opts.modelCacheDir,
@@ -327,6 +335,7 @@ export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpSer
       });
     });
   } catch (error) {
+    await lexicalSession?.dispose();
     throw error;
   }
   const address = server.address();
@@ -334,12 +343,14 @@ export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpSer
   const urlHost = host === "::1" ? "[::1]" : host;
   return {
     url: `http://${urlHost}:${actualPort}`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) reject(error);
           else resolve();
         });
-      }),
+      });
+      await lexicalSession?.dispose();
+    },
   };
 }

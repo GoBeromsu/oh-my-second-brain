@@ -189,7 +189,7 @@ async function parseDocs(vault: string, paths: readonly string[], expected?: Rea
 }
 
 /** Shared identity classification. Required and allowed-value checks stay out of search. */
-function classifyIdentity(doc: ParsedDoc, meta: SearchTemplateSource, templateIds: ReadonlySet<string>): { readonly template: string | null; readonly binding: NodeTemplateBinding; readonly diagnostics: readonly string[] } {
+function classifyIdentity(doc: Pick<ParsedDoc, "frontmatter" | "diagnostics">, meta: SearchTemplateSource, templateIds: ReadonlySet<string>): { readonly template: string | null; readonly binding: NodeTemplateBinding; readonly diagnostics: readonly string[] } {
   if (meta.source.templates === null) return { template: null, binding: "unresolved", diagnostics: doc.diagnostics };
   const identity = classifyNoteTemplateIdentity(doc.frontmatter, templateIds, doc.diagnostics.length > 0);
   if (identity.layer === "unresolved") {
@@ -206,7 +206,7 @@ async function loadBoundDocs(vault: string, meta: SearchTemplateSource, files: r
   return { retrieval, docs };
 }
 
-function fieldKeys(retrieval: TemplateRetrievalAxes | null, doc: BoundDoc): readonly string[] {
+function fieldKeys(retrieval: TemplateRetrievalAxes | null, doc: Pick<BoundDoc, "docPath" | "template" | "binding">): readonly string[] {
   if (retrieval === null || doc.binding === "unresolved") return [];
   if (doc.binding === "default") return retrieval.defaultAxes.map(axis => axis.key);
   const match = retrieval.templates.find(item => item.templateId === doc.template);
@@ -215,7 +215,7 @@ function fieldKeys(retrieval: TemplateRetrievalAxes | null, doc: BoundDoc): read
 }
 
 /** Unclosed fences parse to an empty body, so malformed notes are searched from the raw text. */
-function lexicalText(doc: BoundDoc): string {
+function lexicalText(doc: Pick<ParsedDoc, "raw" | "body" | "diagnostics">): string {
   return doc.diagnostics.includes("invalid-frontmatter") ? doc.raw : doc.body;
 }
 
@@ -326,14 +326,84 @@ export async function buildGraph(opts: { readonly vaultPath: string; readonly me
   return (await buildGraphWithWarnings(opts)).edges;
 }
 
+/** Compact input for the existing node projection; it retains no raw note body. */
+export interface NodeProjectionDocument {
+  readonly docPath: string;
+  readonly frontmatter: Record<string, unknown>;
+  readonly diagnostics: readonly string[];
+  readonly links: readonly string[];
+  readonly bodyPreview: string;
+  readonly lexicalTerms: readonly string[];
+  /** Conservative representation-size estimate for bounded process-local caches. */
+  readonly retainedBytes: number;
+}
+
+/** V8 slices can pin a whole note; retained projection strings must own their bytes. */
+function ownString(value: string): string { return Buffer.from(value, "utf16le").toString("utf16le"); }
+
+function ownProjectionValue(value: unknown, seen = new Map<object, unknown>()): unknown {
+  if (typeof value === "string") return ownString(value);
+  if (value === null || typeof value !== "object") return value;
+  const prior = seen.get(value);
+  if (prior !== undefined) return prior;
+  if (value instanceof Date) return new Date(value.getTime());
+  if (Buffer.isBuffer(value)) return Buffer.from(value);
+  if (value instanceof Uint8Array) return Uint8Array.from(value);
+  const copy: unknown[] | Record<string, unknown> = Array.isArray(value) ? [] : Object.create(null) as Record<string, unknown>;
+  seen.set(value, copy);
+  for (const key of Object.keys(value)) {
+    Object.defineProperty(copy, ownString(key), {
+      value: ownProjectionValue(ownValue(value as Record<string, unknown>, key), seen),
+      enumerable: true, configurable: true, writable: true,
+    });
+  }
+  return copy;
+}
+
+function projectionDocument(doc: Pick<ParsedDoc, "docPath" | "raw" | "frontmatter" | "body" | "diagnostics">, includeLexicalTerms = true): NodeProjectionDocument {
+  const links = wikilinks(doc.body).map(ownString);
+  const lexicalTerms = includeLexicalTerms ? [...new Set(tokenize(lexicalText(doc)))].map(ownString) : [];
+  const bodyPreview = ownString(doc.body.slice(0, 240));
+  const frontmatter = ownProjectionValue(doc.frontmatter) as Record<string, unknown>;
+  const diagnostics = doc.diagnostics.map(ownString);
+  let frontmatterBytes: number;
+  try { frontmatterBytes = Buffer.byteLength(JSON.stringify(acyclicValue(frontmatter, new Set())), "utf8") * 4; }
+  catch { frontmatterBytes = Buffer.byteLength(doc.raw, "utf8") * 4; }
+  const stringBytes = (values: readonly string[]): number => values.reduce((sum, value) => sum + value.length * 2 + 64, 0);
+  return {
+    docPath: ownString(doc.docPath), frontmatter, diagnostics,
+    links, lexicalTerms, bodyPreview,
+    retainedBytes: frontmatterBytes + stringBytes([...links, ...lexicalTerms, ...doc.diagnostics]) + bodyPreview.length * 2 + doc.docPath.length * 2 + 1024,
+  };
+}
+
+/** Parse captured bytes once; facets do not need retained lexical terms. */
+export function parseNodeProjectionDocument(docPath: string, raw: string, includeLexicalTerms = true): NodeProjectionDocument {
+  return projectionDocument({ docPath, raw, ...parseDocument(raw) }, includeLexicalTerms);
+}
+
+/** Reuse one binding/axis/link projection for filesystem and live captured sources. */
+export function projectNodeIndex(sources: readonly NodeProjectionDocument[], meta: SearchTemplateSource): EngineGraphNode[] {
+  const retrieval = requireSource(meta);
+  const templateIds = new Set(retrieval?.templates.map(item => item.templateId) ?? []);
+  const docs = sources.map(doc => ({ ...doc, ...classifyIdentity(doc, meta, templateIds) }));
+  return nodesFromProjectionDocs(retrieval, docs);
+}
+
+/** Preserve the graph cache's single handle-bound byte capture and classification. */
+function nodesFromDocs(retrieval: TemplateRetrievalAxes | null, docs: readonly BoundDoc[]): EngineGraphNode[] {
+  return nodesFromProjectionDocs(retrieval, docs.map(doc => ({
+    ...projectionDocument(doc), template: doc.template, binding: doc.binding, diagnostics: doc.diagnostics,
+  })));
+}
+
 /** Scan ordinary notes and construct retrieval nodes without writing vault state. */
 export async function buildNodeIndex(opts: { readonly vaultPath: string; readonly meta: SearchTemplateSource; readonly files?: readonly string[] }): Promise<EngineGraphNode[]> {
-  const vault = path.resolve(opts.vaultPath);
-  const { retrieval, docs } = await loadBoundDocs(vault, opts.meta, opts.files);
+  const { retrieval, docs } = await loadBoundDocs(path.resolve(opts.vaultPath), opts.meta, opts.files);
   return nodesFromDocs(retrieval, docs);
 }
 
-function nodesFromDocs(retrieval: TemplateRetrievalAxes | null, docs: readonly BoundDoc[]): EngineGraphNode[] {
+function nodesFromProjectionDocs(retrieval: TemplateRetrievalAxes | null, docs: readonly (NodeProjectionDocument & Pick<BoundDoc, "template" | "binding">)[]): EngineGraphNode[] {
   const index = wikilinkIndex(docs);
   return docs.map(doc => {
     const axes: Record<string, readonly AxisScalar[]> = {};
@@ -346,7 +416,7 @@ function nodesFromDocs(retrieval: TemplateRetrievalAxes | null, docs: readonly B
       axes[key] = converted.values;
       searchable.push(...converted.values.map(value => String(value)));
     }
-    const outgoing = wikilinks(doc.body).map(link => resolveWikilink(link, index).docPath).filter((link): link is string => link !== null).sort((left, right) => left.localeCompare(right));
+    const outgoing = doc.links.map(link => resolveWikilink(link, index).docPath).filter((link): link is string => link !== null).sort((left, right) => left.localeCompare(right));
     return {
       path: doc.docPath,
       template: doc.template,
@@ -355,8 +425,8 @@ function nodesFromDocs(retrieval: TemplateRetrievalAxes | null, docs: readonly B
       folder: folderOf(doc.docPath),
       axes,
       wikilinks: outgoing,
-      bodyPreview: doc.body.slice(0, 240),
-      searchTerms: new Set([...tokenize(searchable.join(" ")), ...tokenize(lexicalText(doc))]),
+      bodyPreview: doc.bodyPreview,
+      searchTerms: new Set([...tokenize(searchable.join(" ")), ...doc.lexicalTerms]),
     };
   }).sort((left, right) => left.path.localeCompare(right.path));
 }

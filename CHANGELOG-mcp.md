@@ -4,6 +4,10 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- Live lexical servers retain only the detached index between requests. Reranker/model adapters remain request-owned, so changed installed-model defaults are resolved on the next request and caller-owned rerankers are never disposed.
+
+- **Repeated lexical queries reuse one read-only live snapshot per server.** Unsynced note edits are searchable immediately on the next stable request. The server no longer copies the entire persistent index once to probe existence and again to execute the same query; explicit vector operations retain their existing request-scoped validation.
+
 ## [0.20.6] - 2026-10-01
 
 - **The server instructions no longer call a stale `ifMatch` a safety refusal.** They listed it beside the vault boundary and a tampered contract as something that denies `write`. A missing or stale `ifMatch` is a revision precondition: it returns `WRITE_IF_MATCH_REQUIRED` or the retryable `WRITE_TARGET_CHANGED` and writes nothing, and the safety list now also names unsupported input.

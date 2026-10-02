@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- **CLI and HTTP lexical search see unsynced note edits without repairing the persistent index.** HTTP reuses a server-owned detached native FTS corpus; each CLI invocation closes its own transient corpus. Requests that race an edit return a retry instead of stale matches with new previews.
+
 ## [0.20.6] - 2026-10-01
 
 - **`oms doctor contract --fix` usage says what it repairs.** The `doctor` and contract usage text said `--fix` only re-indexes a moved or unindexed vault; it also rebuilds an unreadable index, and the usage now says so. The contract usage also names `oms interview` as the command that reseals a broken seal, matching the diagnosis's `recovery` field.

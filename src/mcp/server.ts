@@ -13,7 +13,7 @@ import { readBundledPackageVersion } from "../kernel/runtime/assets.js";
 import { retrieveContextSemanticInputProperties } from "../kernel/semantic/semantic-retrieve.js";
 import { semanticQueryOptionsFromArgs } from "../kernel/semantic/semantic-retrieve-args.js";
 import {
-  assembleEphemeralCoreSemanticEngine,
+  assembleLiveLexicalEngine,
   assembleCoreSemanticEngineReadOnly,
   assembleCoreSemanticEngine,
   assembleEngineReadOnly,
@@ -24,6 +24,7 @@ import {
   assembleFullSemanticEngine,
   embeddingConfigPresent,
 } from "../kernel/semantic/semantic-engine.js";
+import { LiveLexicalSession } from "../kernel/engine/embed/live-lexical.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import type { Reranker } from "../kernel/engine/retrieval/reranker.js";
 import { EngineSearchBackend, requiresEmbeddings } from "../kernel/searchbackend/engine-search-backend.js";
@@ -293,8 +294,13 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       }));
   const getReadOnlyCoreSemanticEngine = (): AssembledEngine | null =>
     own(assembleCoreSemanticEngineReadOnly({ vault, reranker: opts.reranker }));
-  const getEphemeralCoreSemanticEngine = async (): Promise<AssembledEngine> =>
-    own(assembleEphemeralCoreSemanticEngine({ vault, reranker: opts.reranker }));
+  // This engine owns only detached core FTS state. Persistent/vector engines
+  // remain request-scoped; the lexical session checks their generation afresh.
+  let liveLexicalSession: LiveLexicalSession | undefined;
+  const getLiveLexicalEngine = (): AssembledEngine => own(assembleLiveLexicalEngine(
+    { vault, reranker: opts.reranker },
+    liveLexicalSession ??= new LiveLexicalSession({ vault }),
+  ));
   let engineMutationTail = Promise.resolve();
   let engineMutationLifecycleFailure: Error | null = null;
   const engineMutation = (request: { readonly params: { readonly name: string; readonly arguments?: unknown } }): boolean => {
@@ -349,12 +355,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     if (adapter === undefined || adapter === null) throw new SemanticIndexUnavailableError();
     return adapter;
   };
-  const resolveReadOnlyLexicalAdapter = async (): Promise<McpEngineAdapter> => {
-    const adapter = hasEmbeddingModel()
-      ? getReadOnlySemanticEngine()?.adapter
-      : getReadOnlyCoreSemanticEngine()?.adapter;
-    return adapter ?? (await getEphemeralCoreSemanticEngine()).adapter;
-  };
+  const resolveReadOnlyLexicalAdapter = async (): Promise<McpEngineAdapter> => getLiveLexicalEngine().adapter;
   const hasExplicitEmbeddingIntent = (args: Record<string, unknown> | undefined): boolean => {
     const queryOptions = semanticQueryOptionsFromArgs(vault, args);
     return requiresEmbeddings({
@@ -374,7 +375,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         if (!hasEmbeddingModel()) return getSemanticEngine().adapter;
         return resolveReadOnlyIndexAdapter();
       })()
-      : resolveReadOnlyIndexAdapter(),
+      : getLiveLexicalEngine().adapter,
     vault,
   );
 
@@ -408,7 +409,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   );
 
   server.onclose = () => {
-    void engine.dispose().catch(() => undefined);
+    void Promise.all([engine.dispose(), liveLexicalSession?.dispose()]).catch(() => undefined);
   };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({

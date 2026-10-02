@@ -4,10 +4,18 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
-- Graph and node-index construction bound concurrent note reads to 32 handles, preventing file-descriptor exhaustion on large vaults without changing the resulting projection or source signature. A failed read stops new work and drains open handles before its original error is returned.
+- Hash-prefixed native document IDs resolve currently admitted Markdown paths, so new or renamed live-search hits can be opened before an explicit index sync. The reader checks current exclusions and captures confined, non-symlink source bytes without changing model/backend selection.
+
+- Live lexical sessions pin candidate capture across concurrent generation changes, drain bounded readers before failed cleanup, and release oversized cores when spill fails. Compact facet projections own their retained string storage so previews, YAML scalars, and link targets cannot pin entire raw notes behind the cache budget.
+
+- **Lexical search stays current between explicit index syncs.** A bounded, session-owned native SQLite FTS corpus refreshes changed/new notes and removes deleted or excluded notes without modifying the vault or persistent index. Native ranking, candidate limits, and complete totals are preserved; source evidence and preview-byte checks reject mid-query revision races. Missing legacy evidence is rebuilt only in the detached corpus, and oversized snapshots spill to disposable external storage.
+
+- Skip per-note filesystem alias probes when source exclusions contain no alias targets, keeping ordinary vault scans responsive without changing exclusion decisions.
 - Read-only SQLite snapshot capture now streams through one 1 MiB buffer instead of retaining two whole database/WAL images. The existing double-capture byte-digest and file-identity checks remain, opened handles are verified against the observed pathname, and failed captures close descriptors and discard their temporary files. Large indexes can be read without memory allocation proportional to multiple copies of the index.
 
 - **Persisted searches report stale source evidence instead of presenting stale matches with fresh previews.** Explicit synchronization records per-note filesystem change evidence and byte digests, including empty notes. A read-only indexed query checks that evidence before retrieval and again after reading previews; missing legacy evidence or externally changed notes return `available: false`, `indexDrift: true`, and an explicit sync command. Unchanged checks do not read note bodies, and a byte-identical touch is verified by hashing only that note. Full or collection-scoped synchronization also removes deleted or newly excluded entries in its own scope; one-file write maintenance preserves unrelated entries. This is a correctness boundary, not live indexing: a subsequent change can add read-only live refresh without weakening the evidence checks.
+- Graph and node-index construction bound concurrent note reads to 32 handles, preventing file-descriptor exhaustion on large vaults without changing the resulting projection or source signature. A failed read stops new work and drains open handles before its original error is returned.
+
 - Warm node-cache reads validate a version-5 filesystem metadata witness instead of rereading every note body. Byte-identical touches still reuse the cache through the existing content hash; real edits and projection changes remain loud. Explicit graph builds derive edges, nodes, and the content hash from the same handle-verified captured bytes and verify note membership and metadata before publishing either cache, while read-only searches leave cache state untouched. Filesystems without trustworthy high-resolution identity evidence retain full-byte validation.
 
 ## [0.20.6] - 2026-10-01

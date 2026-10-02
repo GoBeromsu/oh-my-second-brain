@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildGraph, buildGraphWithWarnings, buildNodeIndex, loadCachedGraph, loadCachedGraphMeta, loadNodeIndex, nodeSourceSignature, saveCachedGraph, saveNodeIndex, TYPE_AFFINITY_MAX_GROUP, typeAffinityCapWarnings } from "./builder.js";
+import { parseNodeProjectionDocument, projectNodeIndex, buildGraph, buildGraphWithWarnings, buildNodeIndex, loadCachedGraph, loadCachedGraphMeta, loadNodeIndex, nodeSourceSignature, saveCachedGraph, saveNodeIndex, TYPE_AFFINITY_MAX_GROUP, typeAffinityCapWarnings } from "./builder.js";
 import { filterNodesByQueryAxes, queryFacets } from "./node.js";
 import type { EngineGraphNode } from "./node.js";
 import type { SearchTemplateSource } from "../retrieval/template-source.js";
@@ -84,6 +84,40 @@ async function typeAffinityGroup(templateId: string, count: number, directory = 
 function byPath(nodes: readonly EngineGraphNode[]): Map<string, EngineGraphNode> {
   return new Map(nodes.map(node => [node.path, node]));
 }
+
+describe("captured node projection", () => {
+  it("preserves lone surrogate preview code units and cyclic YAML aliases while copying retained strings", () => {
+    const raw = "a".repeat(239) + "😀" + "z".repeat(4096);
+    const document = parseNodeProjectionDocument("emoji.md", raw, false);
+    expect(document.bodyPreview).toBe(raw.slice(0, 240));
+    expect(document.bodyPreview.charCodeAt(239)).toBe(0xd83d);
+    const cyclic = parseNodeProjectionDocument("cycle.md", "---\nloop: &loop [*loop]\n---\nbody", false);
+    const loop = cyclic.frontmatter.loop as unknown[];
+    expect(loop[0]).toBe(loop);
+    const dated = parseNodeProjectionDocument("date.md", "---\nwhen: !!timestamp 2026-10-01T12:00:00Z\n---\nbody", false);
+    expect(dated.frontmatter.when).toBeInstanceOf(Date);
+    expect((dated.frontmatter.when as Date).toISOString()).toBe("2026-10-01T12:00:00.000Z");
+  });
+
+  it("uses the same fields, identities, and alias links without retaining note bodies", async () => {
+    const first = "---\ntemplate: note\nstatus: open\naliases: [Destination]\n---\n# Alpha\nprivate body content\n";
+    const second = "---\ntemplate: note\nstatus: closed\n---\n# Beta\n[[Destination]]\n";
+    await rawNote("notes/alpha.md", first);
+    await rawNote("notes/beta.md", second);
+    const source = meta();
+    const full = await buildNodeIndex({ vaultPath: vault, meta: source });
+    const captured = [parseNodeProjectionDocument("notes/alpha.md", first, false), parseNodeProjectionDocument("notes/beta.md", second, false)];
+    expect(captured[0]).not.toHaveProperty("raw");
+    expect(captured[0]).not.toHaveProperty("body");
+    expect(captured[0]!.lexicalTerms).toEqual([]);
+    expect(queryFacets(projectNodeIndex(captured, source))).toEqual(queryFacets(full));
+    expect(projectNodeIndex(captured, source)[1]!.wikilinks).toEqual(["notes/alpha.md"]);
+    const changed = [parseNodeProjectionDocument("notes/alpha.md", first.replace("Destination", "Elsewhere"), false), captured[1]!];
+    expect(projectNodeIndex(changed, source)[1]!.wikilinks).toEqual([]);
+    const fieldsChanged = meta({ templates: { note: fields({ rating: field("rating", { type: "number" }) }) } });
+    expect(queryFacets(projectNodeIndex(captured, fieldsChanged)).some(facet => facet.key === "status")).toBe(false);
+  });
+});
 
 beforeEach(async () => {
   vault = await mkdtemp(path.join(tmpdir(), "oms-template-graph-"));

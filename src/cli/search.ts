@@ -213,8 +213,12 @@ async function runSearch(argv: readonly string[], deps: SearchCommandDeps): Prom
   if (requestedMode !== "query" && requestedMode !== "search" && requestedMode !== "vsearch") {
     fail("--mode must be query, search, or vsearch");
   }
-  const result = await deps.runEngineSession(resolved.vault, { write: false }, (adapter) =>
-    adapter.semanticQuery(searchQueryOptions(requestedMode as SemanticSearchMode, resolved.vault, args, query)));
+  const { requiresEmbeddings } = await import("../kernel/searchbackend/engine-search-backend.js");
+  const queryOptions = searchQueryOptions(requestedMode as SemanticSearchMode, resolved.vault, args, query);
+  const result = await deps.runEngineSession(resolved.vault, {
+    write: false,
+    ...(requiresEmbeddings(queryOptions) ? {} : { liveLexical: true as const }),
+  }, (adapter) => adapter.semanticQuery(queryOptions));
   printJson(console.log, result);
   if (!result.available) process.exitCode = 1;
 }
