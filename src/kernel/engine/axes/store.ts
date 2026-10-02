@@ -1,14 +1,22 @@
-import { createHash } from "node:crypto";
+import { normalizeAxisValue, type AxisValue, type AxisValueType } from "./values.js";
+export { normalizeAxisValue, type AxisValue, type AxisValueType } from "./values.js";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { deserialize, serialize } from "node:v8";
 import Database from "better-sqlite3";
 import { parseNote } from "../../conventions/frontmatter.js";
+import { toAxisScalars } from "../graph/node.js";
+import { comparable, compare, equals, type AxisScalar } from "./predicates.js";
+import { observedPathQuery, type ObservedFieldFilters } from "./observed-query.js";
+export type { ObservedFieldFilters } from "./observed-query.js";
+import { discoverObserved, type ObservedDiscoveryOptions, type ObservedDiscoveryResult } from "./observed-discovery.js";
+export type { ObservedDiscoveryOptions, ObservedDiscoveryResult } from "./observed-discovery.js";
 import { engineAxisCachePath } from "../paths.js";
 import { managedSourceExclusionMatcher } from "../../conventions/note-exclude.js";
+import type { NodeProjectionDocument } from "../graph/builder.js";
 
 export type AxisKind = "folder" | "field" | "link";
-export type AxisValueType = "string" | "number" | "boolean" | "date";
-export type AxisValue = string | number | boolean | Date;
 
 export interface AxisObservation {
   readonly notePath: string;
@@ -37,6 +45,20 @@ export interface AxisFacet {
   readonly count: number;
 }
 
+/** A parsed current-note source, shared with the live lexical snapshot. */
+export interface ObservedMetadataDocument {
+  readonly docPath: string;
+  readonly frontmatter: Readonly<Record<string, unknown>>;
+  /** SHA-256 of the source bytes that produced this frontmatter. */
+  readonly contentSha256: string;
+  readonly diagnostics?: readonly string[];
+}
+
+export interface ObservedMetadataDiagnostics {
+  readonly malformedNotes: number;
+  readonly unsupportedFields: number;
+}
+
 interface AxisRow {
   note_path: string;
   axis_kind: AxisKind;
@@ -57,48 +79,25 @@ function canonicalAxisKey(value: string): string {
   return key;
 }
 
-function scalarType(value: AxisValue): AxisValueType {
-  if (value instanceof Date) return "date";
-  if (typeof value === "string") return "string";
-  if (typeof value === "number") return "number";
-  return "boolean";
-}
-
-function canonicalScalar(value: AxisValue): AxisValue {
-  if (value instanceof Date) {
-    if (Number.isNaN(value.getTime())) throw new Error("Axis date value must be valid.");
-    return value.toISOString();
-  }
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (normalized.length === 0) throw new Error("Axis string value must be non-empty.");
-    return normalized;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error("Axis number value must be finite.");
-    return value;
-  }
-  return value;
-}
-
 function flattenValue(value: unknown): AxisValue[] {
-  if (Array.isArray(value)) return value.flatMap(flattenValue);
-  if (value instanceof Date || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return [value];
+  const values: AxisValue[] = [];
+  const ancestors = new Set<readonly unknown[]>();
+  const stack: Array<{ readonly value: unknown; readonly exit?: true }> = [{ value }];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (Array.isArray(current.value)) {
+      if (current.exit) {
+        ancestors.delete(current.value);
+      } else if (!ancestors.has(current.value)) {
+        ancestors.add(current.value);
+        stack.push({ value: current.value, exit: true });
+        for (let index = current.value.length - 1; index >= 0; index--) stack.push({ value: current.value[index] });
+      }
+    } else if (current.value instanceof Date || typeof current.value === "string" || typeof current.value === "number" || typeof current.value === "boolean") {
+      values.push(current.value);
+    }
   }
-  if (value === null || value === undefined) return [];
-  return [];
-}
-
-function normalizedLookup(value: AxisValue, type: AxisValueType): string {
-  if (type === "date") return (value instanceof Date ? value.toISOString() : String(value)).toLowerCase();
-  return String(value).trim().toLowerCase();
-}
-
-export function normalizeAxisValue(value: AxisValue): { readonly value: AxisValue; readonly type: AxisValueType; readonly normalizedValue: string } {
-  const canonical = canonicalScalar(value);
-  const type = scalarType(value);
-  return { value: canonical, type, normalizedValue: normalizedLookup(canonical, type) };
+  return values;
 }
 
 function decodeValue(type: AxisValueType, json: string): AxisValue {
@@ -150,26 +149,122 @@ const CREATE_SCHEMA = `
   );
 `;
 
+// Private live-session backing only, never normalized/reconstructed from EAV.
+// Bump when the compact projection contract or its interpretation changes.
+const LIVE_PROJECTION_VERSION = 1;
+const CREATE_LIVE_PROJECTION_SCHEMA = `
+  CREATE TABLE live_projection (
+    note_path TEXT PRIMARY KEY,
+    content_sha256 TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    document BLOB NOT NULL
+  );
+`;
+
+function isLiveProjection(value: unknown, notePath: string): value is NodeProjectionDocument {
+  if (value === null || typeof value !== "object") return false;
+  const document = value as Partial<NodeProjectionDocument>;
+  const strings = (items: unknown): boolean => Array.isArray(items) && items.every(item => typeof item === "string");
+  return document.docPath === notePath && document.frontmatter !== null && typeof document.frontmatter === "object"
+    && !Array.isArray(document.frontmatter) && strings(document.diagnostics) && strings(document.links)
+    && strings(document.lexicalTerms) && typeof document.bodyPreview === "string"
+    && Number.isSafeInteger(document.retainedBytes) && document.retainedBytes! >= 0;
+}
+
 /** Dedicated EAV repository; never shares the embedding engine database. */
 export class AxisObservationStore {
   readonly dbPath: string;
   private readonly db: Database.Database;
   private closed = false;
   private transactionDepth = 0;
+  private readonly cursorIdentity = randomUUID();
+  private observationVersion = 0;
+  private observedSnapshotReady = false;
+  private observedSnapshotStorage: boolean;
+  private liveProjectionStorage = false;
+  private observedSources = new Map<string, string>();
+  private observedDiagnostics: ObservedMetadataDiagnostics = { malformedNotes: 0, unsupportedFields: 0 };
 
   constructor(dbPath: string, options: { readonly readonly?: boolean; readonly readOnly?: boolean } = {}) {
     this.dbPath = dbPath;
+    this.observedSnapshotStorage = dbPath === ":memory:";
     if (options.readonly === true || options.readOnly === true) {
       this.db = new Database(dbPath, { readonly: true, fileMustExist: true });
     } else {
       this.db = new Database(dbPath);
       this.db.pragma("journal_mode = WAL");
+      if (dbPath === ":memory:") this.db.pragma("temp_store = MEMORY");
       this.db.exec(CREATE_SCHEMA);
     }
+    // These deterministic helpers share declared-axis scalar semantics. The
+    // observed range alone skips incomparable mixed-list members rather than
+    // throwing away an otherwise valid lexical note.
+    const scalar = (type: string, json: string): AxisScalar => {
+      const value = decodeValue(type as AxisValueType, json);
+      return value instanceof Date ? value.toISOString() : value;
+    };
+    const parsedParams = new Map<string, unknown>();
+    const parameter = (json: string): unknown => {
+      if (parsedParams.has(json)) return parsedParams.get(json);
+      const parsed = JSON.parse(json) as unknown;
+      if (parsedParams.size >= 128) parsedParams.clear();
+      parsedParams.set(json, parsed);
+      return parsed;
+    };
+    this.db.function("oms_axis_any", { deterministic: true }, (type: string, json: string, expected: string) => {
+      const value = scalar(type, json);
+      return (parameter(expected) as readonly AxisScalar[]).some(item => equals(value, item)) ? 1 : 0;
+    });
+    this.db.function("oms_axis_compare", { deterministic: true }, (type: string, json: string, expected: string) => {
+      const value = scalar(type, json);
+      const boundary = parameter(expected) as AxisScalar;
+      return typeof comparable(value) === typeof comparable(boundary) ? compare(value, boundary) : null;
+    });
   }
 
   private ensureOpen(): void {
     if (this.closed) throw new Error("Axis observation store is closed.");
+  }
+
+  /** Preserve the original compact projection, including cycles, Date and UTF-16. */
+  replaceLiveProjection(document: NodeProjectionDocument, contentSha256: string): void {
+    this.ensureOpen();
+    if (!this.observedSnapshotStorage) throw new Error("Live projections require an in-memory or session-private ephemeral axis store.");
+    if (!this.liveProjectionStorage) {
+      this.db.exec(CREATE_LIVE_PROJECTION_SCHEMA);
+      this.liveProjectionStorage = true;
+    }
+    this.db.prepare(`INSERT INTO live_projection (note_path, content_sha256, version, document) VALUES (?, ?, ?, ?)
+      ON CONFLICT(note_path) DO UPDATE SET content_sha256 = excluded.content_sha256, version = excluded.version, document = excluded.document`)
+      .run(document.docPath, contentSha256, LIVE_PROJECTION_VERSION, serialize(document));
+  }
+
+  /** A missing, incompatible or damaged row is a recapture, never a missing note. */
+  readLiveProjection(notePath: string, contentSha256: string): NodeProjectionDocument | undefined {
+    this.ensureOpen();
+    if (!this.liveProjectionStorage) return undefined;
+    const row = this.db.prepare("SELECT document FROM live_projection WHERE note_path = ? AND content_sha256 = ? AND version = ?")
+      .get(notePath, contentSha256, LIVE_PROJECTION_VERSION) as { document: Buffer } | undefined;
+    if (row === undefined) return undefined;
+    try {
+      const document: unknown = deserialize(row.document);
+      return isLiveProjection(document, notePath) ? document : undefined;
+    } catch { return undefined; }
+  }
+
+  deleteLiveProjection(notePath: string): void {
+    this.ensureOpen();
+    if (this.liveProjectionStorage) this.db.prepare("DELETE FROM live_projection WHERE note_path = ?").run(notePath);
+  }
+
+  /** Backing only; canonical EAV stays at its last explicitly reconciled snapshot. */
+  pruneLiveProjections(includedPaths: ReadonlyMap<string, unknown>): void {
+    this.ensureOpen();
+    if (!this.liveProjectionStorage) return;
+    const rows = this.db.prepare("SELECT note_path FROM live_projection").all() as Array<{ note_path: string }>;
+    this.runInTransaction(() => {
+      for (const row of rows) if (!includedPaths.has(row.note_path)) this.deleteLiveProjection(row.note_path);
+    });
   }
 
   /**
@@ -215,6 +310,56 @@ export class AxisObservationStore {
     }
   }
 
+  /**
+   * Reconcile an in-memory observed-field projection from an already parsed
+   * current-note snapshot. This never scans the vault or opens a disk cache.
+   * Malformed/unsupported metadata stays diagnostic; it cannot remove the
+   * note from the separate lexical snapshot. Values retain the EAV store's
+   * canonical trimmed/lowercase spelling, never an invented display spelling.
+   */
+  reconcileObservedSnapshot(
+    documents: readonly ObservedMetadataDocument[],
+    sourceSignature: string,
+  ): ObservedMetadataDiagnostics {
+    this.ensureOpen();
+    if (!this.observedSnapshotStorage) throw new Error("Observed search snapshots require an in-memory or session-private ephemeral axis store.");
+    if (this.observedSnapshotReady && sourceSignature === this.sourceSignature()) return this.observedDiagnostics;
+    const previousSources = this.observedSnapshotReady ? this.observedSources : new Map<string, string>();
+    const previousPaths = this.observedSnapshotReady ? [...this.observedSources.keys()] : (this.db.prepare("SELECT DISTINCT note_path FROM axis_observation").all() as Array<{ note_path: string }>).map(row => row.note_path);
+    const nextSources = new Map<string, string>();
+    const replacements: Array<{ readonly path: string; readonly fields: Readonly<Record<string, unknown>> }> = [];
+    let malformedNotes = 0;
+    let unsupportedFields = 0;
+    for (const document of documents) {
+      if (nextSources.has(document.docPath)) throw new Error("Observed source snapshot contains duplicate note paths.");
+      nextSources.set(document.docPath, document.contentSha256);
+      const fields = Object.create(null) as Record<string, unknown>;
+      if ((document.diagnostics?.length ?? 0) > 0) {
+        malformedNotes++;
+      } else {
+        for (const [key, value] of Object.entries(document.frontmatter)) {
+          if (!key.trim()) {
+            unsupportedFields++;
+            continue;
+          }
+          const converted = toAxisScalars(value);
+          if (!converted.supported) unsupportedFields++;
+          fields[key] = converted.values;
+        }
+      }
+      if (previousSources.get(document.docPath) !== document.contentSha256) replacements.push({ path: document.docPath, fields });
+    }
+    this.runInTransaction(() => {
+      for (const replacement of replacements) this.replaceNote(replacement.path, replacement.fields);
+      for (const priorPath of previousPaths) if (!nextSources.has(priorPath)) this.deleteNote(priorPath);
+      this.setSourceSignature(sourceSignature);
+    });
+    this.observedSnapshotReady = true;
+    this.observedSources = nextSources;
+    this.observedDiagnostics = { malformedNotes, unsupportedFields };
+    return this.observedDiagnostics;
+  }
+
   /** Source signature of the markdown set used for the last reconciliation. */
   sourceSignature(): string | null {
     this.ensureOpen();
@@ -225,6 +370,8 @@ export class AxisObservationStore {
   setSourceSignature(signature: string): void {
     this.ensureOpen();
     this.db.prepare("INSERT INTO axis_meta (id, source_signature) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET source_signature = excluded.source_signature").run(signature);
+    this.observationVersion++;
+    this.observedSnapshotReady = false;
   }
 
   /** Record one scalar or every scalar in a frontmatter list. */
@@ -244,6 +391,8 @@ export class AxisObservationStore {
     this.runInTransaction(() => {
       for (const value of values) this.insertValues(input.notePath, axisKind, axisKey, value, statement);
     });
+    this.observationVersion++;
+    this.observedSnapshotReady = false;
   }
 
   /** Remove all observations for a note, then atomically replace them. */
@@ -264,12 +413,19 @@ export class AxisObservationStore {
       }
       for (const link of options.links ?? []) this.insertValues(notePath, "link", "link", link, statement);
     });
+    this.observationVersion++;
+    this.observedSnapshotReady = false;
   }
 
   /** Delete stale observations when a markdown note is removed. */
   deleteNote(notePath: string): void {
     this.ensureOpen();
-    this.db.prepare("DELETE FROM axis_observation WHERE note_path = ?").run(notePath);
+    this.runInTransaction(() => {
+      this.db.prepare("DELETE FROM axis_observation WHERE note_path = ?").run(notePath);
+      this.deleteLiveProjection(notePath);
+    });
+    this.observationVersion++;
+    this.observedSnapshotReady = false;
   }
 
   list(options: { readonly axisKind?: AxisKind; readonly axisKey?: string; readonly notePath?: string } = {}): AxisObservation[] {
@@ -296,6 +452,20 @@ export class AxisObservationStore {
        ORDER BY note_path, axis_kind, axis_key, normalized_value`,
     ).all(...params) as AxisRow[];
     return rows.map(toObservation);
+  }
+
+  /** Current observed-field candidates, ready to intersect native FTS before its limit. */
+  matchObservedFields(fields: ObservedFieldFilters, candidatePaths?: readonly string[]): string[] {
+    this.ensureOpen();
+    const query = observedPathQuery(fields, candidatePaths ?? (this.observedSnapshotReady ? [...this.observedSources.keys()] : undefined));
+    const rows = this.db.prepare(query.sql).all(...query.params) as Array<{ note_path: string }>;
+    return rows.map(row => row.note_path);
+  }
+
+  /** Explicit bounded discovery; never returns the full metadata vocabulary. */
+  discoverObservedFields(options: ObservedDiscoveryOptions = {}): ObservedDiscoveryResult {
+    this.ensureOpen();
+    return discoverObserved(this.db, options, this.observedSnapshotReady ? `observed-v1:${this.sourceSignature()}` : `${this.cursorIdentity}:${this.observationVersion}`, decodeValue);
   }
 
   /** Aggregate facets before any result limit is applied. */
@@ -325,6 +495,30 @@ export class AxisObservationStore {
 
   count(options: { readonly axisKind?: AxisKind; readonly axisKey?: string } = {}): number {
     return this.list(options).reduce((sum, row) => sum + row.count, 0);
+  }
+
+  /**
+   * Spill this complete projection into a caller-owned disposable destination.
+   * The live owner validates its external path and removes it on failure/close.
+   * VACUUM INTO copies pages without a JavaScript-sized serialized DB buffer.
+   */
+  copyToEphemeral(destination: string): AxisObservationStore {
+    this.ensureOpen();
+    this.db.prepare("VACUUM INTO ?").run(destination);
+    const copied = new AxisObservationStore(destination);
+    copied.observedSnapshotStorage = true;
+    copied.liveProjectionStorage = this.liveProjectionStorage;
+    copied.observedSources = new Map(this.observedSources);
+    copied.observedDiagnostics = this.observedDiagnostics;
+    copied.observedSnapshotReady = this.observedSnapshotReady;
+    copied.observationVersion = this.observationVersion;
+    return copied;
+  }
+
+  /** Retained SQLite page allocation for the live session's memory budget. */
+  allocatedBytes(): number {
+    this.ensureOpen();
+    return Number(this.db.pragma("page_count", { simple: true })) * Number(this.db.pragma("page_size", { simple: true }));
   }
 
   close(): void {

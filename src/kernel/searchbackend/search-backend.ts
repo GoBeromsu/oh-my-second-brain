@@ -1,5 +1,7 @@
+import { observedQueryOptions } from "../engine/axes/observed-options.js";
 import type {
   McpSemanticQueryAxes,
+  McpSemanticObservedOptions,
   McpSemanticQueryResult,
   McpSemanticSearchMode,
   McpSemanticTypedSearch,
@@ -36,6 +38,7 @@ export interface SearchRequest {
   readonly cursor?: string;
   /** Optional model-free axis narrowing shared with the MCP facade. */
   readonly axes?: McpSemanticQueryAxes;
+  readonly observed?: McpSemanticObservedOptions;
 }
 
 export interface NormalizedSearchRequest {
@@ -55,6 +58,7 @@ export interface NormalizedSearchRequest {
   readonly index?: string;
   readonly cursor?: string;
   readonly axes?: McpSemanticQueryAxes;
+  readonly observed?: McpSemanticObservedOptions;
 }
 
 export class InvalidSearchRequestError extends Error {
@@ -71,6 +75,7 @@ export function normalizeSearchRequest(request: SearchRequest): NormalizedSearch
   if (request === null || typeof request !== "object" || Array.isArray(request)) {
     throw new InvalidSearchRequestError("search request must be an object");
   }
+  const observed = observedQueryOptions(request.observed);
   const query = typeof request.query === "string" && request.query.trim() !== ""
     ? request.query.trim()
     : undefined;
@@ -142,7 +147,7 @@ export function normalizeSearchRequest(request: SearchRequest): NormalizedSearch
     if (request.mode !== undefined && request.mode !== "query") {
       throw new InvalidSearchRequestError(`expand strategy does not support mode "${request.mode}"`);
     }
-    if (request.axes !== undefined) {
+    if (request.axes !== undefined || observed !== undefined) {
       throw new InvalidSearchRequestError("expand strategy does not support axis queries");
     }
   }
@@ -161,11 +166,11 @@ export function normalizeSearchRequest(request: SearchRequest): NormalizedSearch
     // An explicit empty query is the portable overview spelling. Keep a
     // missing property invalid so malformed SearchBackend calls still fail
     // loudly while MCP/CLI can intentionally request an overview.
-    if (!hasQueryProperty) {
+    if (!hasQueryProperty && observed === undefined) {
       throw new InvalidSearchRequestError("provide either 'query' or a non-empty typed search");
     }
   }
-  if (request.mode !== undefined && query === undefined) {
+  if (request.mode !== undefined && query === undefined && observed === undefined) {
     throw new InvalidSearchRequestError("'mode' requires a plain 'query'");
   }
 
@@ -183,6 +188,8 @@ export function normalizeSearchRequest(request: SearchRequest): NormalizedSearch
       .map((collection) => collection.trim())
       .filter((collection) => collection !== ""),
   )];
+  if (observed !== undefined && (request.mode === "vsearch" || request.vec !== undefined || request.hyde !== undefined || [...searches, ...shorthands].some(search => search.type !== "lex"))) throw new InvalidSearchRequestError("Observed metadata filtering and discovery currently support lexical queries only.");
+  if (observed?.discover !== undefined && collections.length > 0) throw new InvalidSearchRequestError("Observed discovery requires a single collectionPath rather than multi-collection aggregation.");
   if (request.limit !== undefined && (!Number.isSafeInteger(request.limit) || request.limit < 0)) {
     throw new InvalidSearchRequestError('"limit" must be a safe non-negative integer');
   }
@@ -227,6 +234,7 @@ export function normalizeSearchRequest(request: SearchRequest): NormalizedSearch
     index: request.index,
     cursor: request.cursor,
     axes: request.axes,
+    ...(observed === undefined ? {} : { observed }),
   };
 }
 

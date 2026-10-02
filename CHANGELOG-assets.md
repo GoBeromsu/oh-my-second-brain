@@ -6,6 +6,10 @@ Skills, agents, templates, and host guidance changes belong here.
 
 - **Use the selected dark library README artwork.** The English and Korean READMEs now share the finished native Blender scene with floating pages and knowledge-stars, with readable poster typography and material credits. Setup commands, safety guidance, links, and runtime behavior are unchanged.
 
+- Search and write guidance explains the existing exact-path read-before-edit flow: use the complete source and its returned revision as `ifMatch`, and reread after a stale-write rejection rather than hashing a retrieved slice.
+
+- The shipped search skill teaches optional-template observed discovery, exact typed facet selection, metadata-only zero-hit responses and the lexical-only/single-collection boundary. It distinguishes detached current-note validation from synchronization of persistent/vector indexes and warm-session speed from cold CLI calls.
+
 - **Refresh the English and Korean README presentation.** Both READMEs now share a repository-specific 3D hero and a more compact overview while preserving setup, contract, host, safety, documentation, and credit guidance. Canonical repository links now point directly to `Xia-Ataraxia/oh-my-second-brain` after the ownership transfer.
 
 ## [0.20.6] - 2026-10-01

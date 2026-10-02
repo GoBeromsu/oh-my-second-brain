@@ -7,7 +7,7 @@
  * - A core-only open path must exist for lex-only operation without embedding config.
  */
 
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
@@ -18,6 +18,9 @@ import {
   validateEmbeddingIdentity,
 } from "./identity.js";
 import { createEngineStoreReadSnapshot } from "./read-snapshot.js";
+import { createDocumentSourceAccess, DOCUMENT_SOURCE_SCHEMA, type DocumentSource } from "./source.js";
+import { createDocumentRevisionAccess, ensureDocumentRevisionSchema, type DocumentRevisionAccess } from "./revision.js";
+import type { CapturedLexicalDocument } from "./lexical-batch.js";
 
 export { ENGINE_EMBED_META_VERSION } from "./identity.js";
 
@@ -119,8 +122,17 @@ export interface EmbeddingIdentity {
  * EngineStore satisfies VectorStore everywhere (structural subtype).
  */
 export interface EngineStore extends VectorStore {
+  /** Native writable stores only; absent on read-only/composite handles. */
+  readonly documentRevisions?: DocumentRevisionAccess;
+  /** Actual vector coverage, so an interrupted legacy lexical update cannot hide missing embeddings. */
+  vectorOrdinals?(docPath: string): Set<number>;
   /** Capability snapshot for this store handle. */
   capabilities(): EngineStoreCapabilities;
+
+  /** Native pre-limit lexical intersection used by detached observed-metadata reads. */
+  queryLexCandidates?(text: string, k: number, candidatePaths: readonly string[], collection?: string): ScoredHit[];
+  /** Complete lexical matching note paths without retaining chunk text or applying a hit limit. */
+  queryLexPaths?(text: string, candidatePaths: readonly string[], collection?: string): string[];
 
   /** Upsert chunks into meta+FTS only (no vectors). */
   upsertLex(rows: ReadonlyArray<Chunk>): void;
@@ -139,6 +151,15 @@ export interface EngineStore extends VectorStore {
 
   /** Delete all chunks (meta + vec + FTS) for `docPath`. */
   clearDocument(docPath: string): void;
+
+  /** A single source row, for maintenance work bounded independently of vault size. */
+  readDocumentSource?(docPath: string): DocumentSource | null;
+
+  /** Per-document source evidence; null for a legacy store without this table. */
+  readDocumentSources(): Map<string, DocumentSource> | null;
+
+  /** Publish evidence only if the expected chunk set is still current. */
+  recordDocumentSource(docPath: string, source: DocumentSource, expected: ReadonlyArray<Pick<Chunk, "ordinal" | "sha">>): void;
 
   /** Return every distinct `doc_path` currently stored. */
   listDocPaths(): string[];
@@ -276,8 +297,15 @@ function decodeEmbeddingIdentity(row: EmbeddingIdentityRow | undefined): Embeddi
   return identity;
 }
 
-function ensureCoreSchema(db: Database.Database): void {
-  db.pragma("journal_mode = WAL");
+/** Read validated identity through an existing connection without creating schema. */
+export function readEngineStoreIdentity(db: Database.Database): EmbeddingIdentity | null {
+  return decodeEmbeddingIdentity(db.prepare<[], EmbeddingIdentityRow>(
+    "SELECT embedding_provider, embedding_model, embedding_revision, embedding_sha256, embedding_dimensions, embedding_context_length, embedding_mrl_dim, embedding_normalization, embedding_prefix_scheme, embedding_fingerprint, embedding_schema_version FROM engine_meta WHERE id = 1",
+  ).get());
+}
+
+function ensureCoreSchema(db: Database.Database, setJournalMode = true): void {
+  if (setJournalMode) db.pragma("journal_mode = WAL");
 
   // (1) engine_meta — single-row embedding identity metadata
   // updated_at is initialised at schema creation and updated again only when
@@ -347,6 +375,8 @@ function ensureCoreSchema(db: Database.Database): void {
       text
     );
   `);
+  db.exec(DOCUMENT_SOURCE_SCHEMA);
+  ensureDocumentRevisionSchema(db);
 }
 
 function vecTableExists(db: Database.Database): boolean {
@@ -354,6 +384,12 @@ function vecTableExists(db: Database.Database): boolean {
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='engine_chunk_vec'")
     .get() as { name: string } | undefined;
   return row !== undefined;
+}
+
+function readVectorOrdinals(db: Database.Database, docPath: string, available: boolean): Set<number> {
+  if (!available) return new Set();
+  const rows = db.prepare<[string], { ordinal: number }>("SELECT m.ordinal FROM engine_chunk_meta m JOIN engine_chunk_vec v ON v.rowid = m.rowid WHERE m.doc_path = ?").all(docPath);
+  return new Set(rows.map(row => row.ordinal));
 }
 
 function createVecTable(db: Database.Database, dimensions: number): void {
@@ -375,17 +411,22 @@ function createVecTable(db: Database.Database, dimensions: number): void {
  * - queryVec() throws
  * - upsert() throws
  */
-export function openEngineStoreCore(dbPath: string): EngineStore {
+export function openEngineStoreCore(dbPath: string, options: { readonly fileMustExist?: boolean } = {}): EngineStore {
   if (dbPath !== ":memory:") {
     mkdirSync(path.dirname(dbPath), { recursive: true });
   }
-  const db = openDatabase(dbPath);
+  const db = openDatabase(dbPath, { fileMustExist: options.fileMustExist === true });
   try {
     ensureCoreSchema(db);
   } catch (error) {
     db.close();
     throw error;
   }
+  return bindCoreStore(db);
+}
+
+/** Bind already initialized core tables; ownership of the connection transfers. */
+function bindCoreStore(db: Database.Database, strictLexical = false, reuseOuterTransaction: () => boolean = () => false): EngineStore {
   // Optional: load sqlite-vec so lex-only sync can delete stale vectors for
   // modified chunks (prevents silent cross-model reuse on later vec queries).
   let stmtDeleteVec: ReturnType<Database.Database["prepare"]> | null = null;
@@ -401,6 +442,9 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
   } catch {
     // sqlite-vec unavailable or vec table absent — core-only mode still works.
   }
+
+  const sources = createDocumentSourceAccess(db, false, reuseOuterTransaction);
+  const documentRevisions = createDocumentRevisionAccess(db);
 
   // Prepared statements — core only
   const stmtGetMeta = db.prepare<[string, number], { rowid: number; doc_path: string; ordinal: number; text: string; sha: string }>(
@@ -420,21 +464,34 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
     "INSERT INTO engine_chunk_fts(rowid, doc_path, ordinal, text) VALUES (?, ?, ?, ?)",
   );
 
-  const stmtQueryLex = db.prepare<[string, number], { doc_path: string; ordinal: number; rank: number }>(
-    `SELECT m.doc_path, m.ordinal, bm25(engine_chunk_fts) AS rank
+  const stmtQueryLex = db.prepare<[string, number], { doc_path: string; ordinal: number; text: string; rank: number }>(
+    `SELECT m.doc_path, m.ordinal, m.text, bm25(engine_chunk_fts) AS rank
      FROM engine_chunk_fts
      JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
      WHERE engine_chunk_fts MATCH ?
      ORDER BY rank
      LIMIT ?`,
   );
-  const stmtQueryLexInCollection = db.prepare<[string, string, string, number], { doc_path: string; ordinal: number; rank: number }>(
-    `SELECT m.doc_path, m.ordinal, bm25(engine_chunk_fts) AS rank
+  const stmtQueryLexInCollection = db.prepare<[string, string, string, number], { doc_path: string; ordinal: number; text: string; rank: number }>(
+    `SELECT m.doc_path, m.ordinal, m.text, bm25(engine_chunk_fts) AS rank
      FROM engine_chunk_fts
      JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
      WHERE engine_chunk_fts MATCH ? AND (m.doc_path = ? OR m.doc_path LIKE ? ESCAPE '!')
      ORDER BY rank
      LIMIT ?`,
+  );
+
+  const scopedCandidates = `engine_chunk_fts MATCH ?
+    AND m.doc_path IN (SELECT value FROM json_each(?))
+    AND (? IS NULL OR m.doc_path = ? OR m.doc_path LIKE ? ESCAPE '!')`;
+  const stmtQueryLexCandidates = db.prepare<[string, string, string | null, string, string, number], { doc_path: string; ordinal: number; text: string; rank: number }>(
+    `SELECT m.doc_path, m.ordinal, m.text, bm25(engine_chunk_fts) AS rank
+     FROM engine_chunk_fts JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
+     WHERE ${scopedCandidates} ORDER BY rank LIMIT ?`,
+  );
+  const stmtQueryLexPaths = db.prepare<[string, string, string | null, string, string], { doc_path: string }>(
+    `SELECT DISTINCT m.doc_path FROM engine_chunk_fts JOIN engine_chunk_meta m ON m.rowid = engine_chunk_fts.rowid
+     WHERE ${scopedCandidates} ORDER BY m.doc_path`,
   );
 
   const stmtGetShas = db.prepare<[string], { ordinal: number; sha: string }>(
@@ -460,8 +517,10 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
     "UPDATE engine_meta SET embedding_provider = ?, embedding_model = ?, embedding_revision = ?, embedding_sha256 = ?, embedding_dimensions = ?, embedding_context_length = ?, embedding_mrl_dim = ?, embedding_normalization = ?, embedding_prefix_scheme = ?, embedding_fingerprint = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = 1",
   );
 
-  const doUpsertLex = db.transaction((rows: ReadonlyArray<Chunk>) => {
+  const upsertLexBody = (rows: ReadonlyArray<Chunk>) => {
     for (const row of rows) {
+      sources.invalidate(row.docPath);
+      documentRevisions.invalidate(row.docPath);
       const existing = stmtGetMeta.get(row.docPath, row.ordinal);
       if (existing) {
         const id = BigInt(existing.rowid);
@@ -475,21 +534,33 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
         stmtInsertFts.run(id, row.docPath, row.ordinal, row.text);
       }
     }
-  });
+  };
+  const doUpsertLex = db.transaction(upsertLexBody);
 
-  const doClearDocument = db.transaction((docPath: string) => {
+  const clearDocumentBody = (docPath: string) => {
+    sources.invalidate(docPath);
+    documentRevisions.invalidate(docPath);
     stmtClearDocVec?.run(docPath);
     stmtClearDocFts.run(docPath);
     stmtClearDocMeta.run(docPath);
-  });
+  };
+  const doClearDocument = db.transaction(clearDocumentBody);
 
   return {
+    documentRevisions,
+    readDocumentSource: sources.readDocumentSource,
+    readDocumentSources: sources.readDocumentSources,
+    recordDocumentSource: sources.recordDocumentSource,
     capabilities(): EngineStoreCapabilities {
       return { vecAvailable: false };
     },
+    vectorOrdinals(docPath: string): Set<number> {
+      return readVectorOrdinals(db, docPath, stmtDeleteVec !== null);
+    },
 
     upsertLex(rows: ReadonlyArray<Chunk>): void {
-      doUpsertLex(rows);
+      if (reuseOuterTransaction() && db.inTransaction) upsertLexBody(rows);
+      else doUpsertLex(rows);
     },
 
     // VectorStore
@@ -508,19 +579,34 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
     queryLex(text: string, k: number, collection?: string): ScoredHit[] {
       const ftsQ = makeFtsQuery(text);
       if (!ftsQ) return [];
-      let rows: Array<{ doc_path: string; ordinal: number; rank: number }>;
+      let rows: Array<{ doc_path: string; ordinal: number; text: string; rank: number }>;
       try {
         rows = collection === undefined
           ? stmtQueryLex.all(ftsQ, k)
           : stmtQueryLexInCollection.all(ftsQ, collection, collectionDescendantLikePattern(collection), k);
-      } catch {
+      } catch (error) {
+        if (strictLexical) throw new Error(`Engine store lexical query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
         return [];
       }
       return rows.map((r, index): ScoredHit => ({
         docPath: r.doc_path,
         chunkOrdinal: r.ordinal,
         score: 1 / (1 + index),
+        text: r.text,
       }));
+    },
+
+    queryLexCandidates(text: string, k: number, candidatePaths: readonly string[], collection?: string): ScoredHit[] {
+      const query = makeFtsQuery(text);
+      if (!query || candidatePaths.length === 0) return [];
+      return stmtQueryLexCandidates.all(query, JSON.stringify(candidatePaths), collection ?? null, collection ?? "", collectionDescendantLikePattern(collection ?? ""), k)
+        .map((row, index) => ({ docPath: row.doc_path, chunkOrdinal: row.ordinal, text: row.text, score: 1 / (1 + index) }));
+    },
+    queryLexPaths(text: string, candidatePaths: readonly string[], collection?: string): string[] {
+      const query = makeFtsQuery(text);
+      if (!query || candidatePaths.length === 0) return [];
+      return stmtQueryLexPaths.all(query, JSON.stringify(candidatePaths), collection ?? null, collection ?? "", collectionDescendantLikePattern(collection ?? ""))
+        .map(row => row.doc_path);
     },
 
     close(): void {
@@ -557,7 +643,8 @@ export function openEngineStoreCore(dbPath: string): EngineStore {
     },
 
     clearDocument(docPath: string): void {
-      doClearDocument(docPath);
+      if (reuseOuterTransaction() && db.inTransaction) clearDocumentBody(docPath);
+      else doClearDocument(docPath);
     },
 
     listDocPaths(): string[] {
@@ -572,6 +659,37 @@ export function openInMemoryEngineStoreCore(): EngineStore {
 }
 
 /**
+ * Explicit maintenance only: preflight, schema initialization, and publication
+ * use one existing database connection and transaction. A rejected preflight
+ * cannot initialize a replacement store; a later throw also rolls back DDL.
+ * The caller owns the cooperative writer lock and must not close the bound store.
+ */
+export function withExistingEngineStoreTransaction<T>(
+  dbPath: string,
+  dimensions: number | undefined,
+  preflight: (db: Database.Database) => void,
+  action: (store: EngineStore) => T,
+): T {
+  const db = openDatabase(dbPath, { fileMustExist: true });
+  let result: T;
+  try {
+    result = db.transaction(() => {
+      preflight(db);
+      // Existing maintenance stores retain their journal mode. Changing it here
+      // would require a write outside the guarded transaction.
+      ensureCoreSchema(db, false);
+      const store = dimensions === undefined ? bindCoreStore(db) : bindVectorStore(db, dimensions);
+      return action(store);
+    }).immediate();
+  } catch (error) {
+    try { db.close(); } catch { /* Preserve the preflight/publication failure. */ }
+    throw error;
+  }
+  db.close();
+  return result;
+}
+
+/**
  * Open (or create) an engine store at `dbPath` with vector capability.
  *
  * Vector-capable mode still guarantees core schema exists even when sqlite-vec
@@ -581,10 +699,10 @@ export function openInMemoryEngineStoreCore(): EngineStore {
 export function openEngineStore(
   dbPath: string,
   dimensions: number,
-  opts: { readonly sqliteVecLoader?: SqliteVecLoader } = {},
+  opts: { readonly sqliteVecLoader?: SqliteVecLoader; readonly fileMustExist?: boolean } = {},
 ): EngineStore {
   mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db = openDatabase(dbPath);
+  const db = openDatabase(dbPath, { fileMustExist: opts.fileMustExist === true });
   try {
     ensureCoreSchema(db);
   } catch (error) {
@@ -592,7 +710,11 @@ export function openEngineStore(
     throw error;
   }
 
-  const sqliteVecLoader = opts.sqliteVecLoader ?? DEFAULT_SQLITE_VEC_LOADER;
+  return bindVectorStore(db, dimensions, opts.sqliteVecLoader);
+}
+
+/** Bind initialized core tables, optionally creating vectors in the caller's transaction. */
+function bindVectorStore(db: Database.Database, dimensions: number, sqliteVecLoader = DEFAULT_SQLITE_VEC_LOADER): EngineStore {
   let vecLoaded = false;
   try {
     sqliteVecLoader(db);
@@ -701,7 +823,12 @@ export function openEngineStore(
       )
     : null;
 
+  const sources = createDocumentSourceAccess(db);
+  const documentRevisions = createDocumentRevisionAccess(db);
+
   const doClearDocument = db.transaction((docPath: string) => {
+    sources.invalidate(docPath);
+    documentRevisions.invalidate(docPath);
     stmtClearDocVec?.run(docPath);
     stmtClearDocFts.run(docPath);
     stmtClearDocMeta.run(docPath);
@@ -709,6 +836,8 @@ export function openEngineStore(
 
   const doUpsertLex = db.transaction((rows: ReadonlyArray<Chunk>) => {
     for (const row of rows) {
+      sources.invalidate(row.docPath);
+      documentRevisions.invalidate(row.docPath);
       const existing = stmtGetMeta.get(row.docPath, row.ordinal);
       if (existing) {
         const id = BigInt(existing.rowid);
@@ -732,6 +861,8 @@ export function openEngineStore(
       throw new Error("EngineStore: vector layer unavailable (sqlite-vec not loaded).");
     }
     for (const row of rows) {
+      sources.invalidate(row.docPath);
+      documentRevisions.invalidate(row.docPath);
       const existing = stmtGetMeta.get(row.docPath, row.ordinal);
       if (existing) {
         const id = BigInt(existing.rowid);
@@ -750,8 +881,15 @@ export function openEngineStore(
   });
 
   return {
+    documentRevisions,
+    readDocumentSource: sources.readDocumentSource,
+    readDocumentSources: sources.readDocumentSources,
+    recordDocumentSource: sources.recordDocumentSource,
     capabilities(): EngineStoreCapabilities {
       return { vecAvailable };
+    },
+    vectorOrdinals(docPath: string): Set<number> {
+      return readVectorOrdinals(db, docPath, vecAvailable);
     },
 
     upsertLex(rows: ReadonlyArray<Chunk>): void {
@@ -959,6 +1097,7 @@ function openReadOnlyStore(
   const { db, dispose } = opened;
 
   try {
+  const sources = createDocumentSourceAccess(db, true);
   const stmtQueryLex = db.prepare<[string, number], { doc_path: string; ordinal: number; text: string; rank: number }>(
     `SELECT m.doc_path, m.ordinal, m.text, bm25(engine_chunk_fts) AS rank
      FROM engine_chunk_fts
@@ -1012,6 +1151,9 @@ function openReadOnlyStore(
   }
 
   return {
+    readDocumentSource: sources.readDocumentSource,
+    readDocumentSources: sources.readDocumentSources,
+    recordDocumentSource: sources.recordDocumentSource,
     capabilities(): EngineStoreCapabilities {
       return { vecAvailable: stmtQueryVec !== null };
     },
@@ -1092,6 +1234,105 @@ function openReadOnlyStore(
       `Engine store at "${dbPath}" is corrupt or unreadable: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
     );
+  }
+}
+
+/** A detached mutable core, private to the live lexical session. */
+export interface DetachedLexicalStore {
+  readonly store: EngineStore;
+  /** One synchronous private transaction; callers capture source bytes first. */
+  reconcileDocument(docPath: string, source: DocumentSource, chunks: readonly Chunk[]): void;
+  /** One synchronous transaction for an already bounded, captured disk batch. */
+  reconcileDocuments(documents: readonly CapturedLexicalDocument[]): void;
+  allocatedBytes(): number;
+  /** Copy this detached core to another detached database; never the source. */
+  copyTo(dbPath: string): DetachedLexicalStore;
+  close(): void;
+}
+
+function detachedHandle(db: Database.Database): DetachedLexicalStore {
+  // This handle owns its outer transactions and propagates every write failure.
+  // FTS5 flushes pending terms on SAVEPOINT; redundant nested savepoints would
+  // defeat batching. Persistent/default bindings retain their independent guards.
+  let reconciling = false;
+  const store = bindCoreStore(db, true, () => reconciling);
+  const allocatedBytes = () => Number(db.pragma("page_count", { simple: true })) * Number(db.pragma("page_size", { simple: true }));
+  const reconcileBody = (docPath: string, source: DocumentSource, chunks: readonly Chunk[]) => {
+    const previous = reconciling;
+    reconciling = true;
+    try {
+      const expected = store.getShas(docPath);
+      if (expected.size !== chunks.length) {
+        // Even an empty virtual-table DELETE flushes pending FTS terms. A
+        // proven absent chunk set needs no clear and can stay in this batch.
+        if (expected.size > 0) store.clearDocument(docPath);
+        store.upsertLex(chunks);
+      } else {
+        const changed = chunks.filter(chunk => expected.get(chunk.ordinal) !== chunk.sha);
+        if (changed.length > 0) store.upsertLex(changed);
+      }
+      // Chunk changes and their verified source evidence share one outer commit.
+      // Only this dedicated wrapper owns rollback; arbitrary active transactions
+      // (including caught failures inside revision callbacks) retain savepoints.
+      store.recordDocumentSource(docPath, source, chunks);
+    } finally {
+      reconciling = previous;
+    }
+  };
+  const reconcileDocument = db.transaction(reconcileBody);
+  const reconcileDocuments = db.transaction((documents: readonly CapturedLexicalDocument[]) => {
+    for (const document of documents) reconcileBody(document.docPath, document.source, document.chunks);
+  });
+  return {
+    store,
+    reconcileDocument,
+    reconcileDocuments,
+    allocatedBytes,
+    copyTo(dbPath): DetachedLexicalStore {
+      db.prepare("VACUUM INTO ?").run(dbPath);
+      const copied = openDatabase(dbPath, { fileMustExist: true });
+      try { return detachedHandle(copied); }
+      catch (error) { copied.close(); throw error; }
+    },
+    close: () => store.close(),
+  };
+}
+
+/**
+ * Seed one native lexical corpus without ever opening the persistent source.
+ * Vectors are deliberately not copied; source evidence and rowids are preserved.
+ * The caller owns the detached handle and any non-memory destination directory.
+ */
+export function openDetachedLexicalStore(sourcePath: string, destination = ":memory:"): DetachedLexicalStore {
+  if (destination !== ":memory:" && existsSync(destination)) throw new Error("Detached lexical destination must be a new disposable database.");
+  const opened = openExistingCoreStore(sourcePath);
+  let db: Database.Database | undefined;
+  try {
+    db = openDatabase(destination);
+    ensureCoreSchema(db);
+    if (opened !== null) {
+      db.prepare("ATTACH DATABASE ? AS seed").run(opened.db.name);
+      db.transaction(() => {
+        db!.exec(`
+          INSERT INTO engine_chunk_meta SELECT * FROM seed.engine_chunk_meta;
+          INSERT INTO engine_chunk_fts(rowid, doc_path, ordinal, text)
+            SELECT rowid, doc_path, ordinal, text FROM seed.engine_chunk_meta;
+        `);
+        if (opened.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='engine_document_source'").get() !== undefined) {
+          db!.exec("INSERT INTO engine_document_source SELECT * FROM seed.engine_document_source");
+        }
+      })();
+      db.exec("DETACH DATABASE seed");
+    }
+    return detachedHandle(db);
+  } catch (error) {
+    db?.close();
+    throw error;
+  } finally {
+    if (opened !== null) {
+      try { opened.db.close(); }
+      finally { opened.dispose(); }
+    }
   }
 }
 

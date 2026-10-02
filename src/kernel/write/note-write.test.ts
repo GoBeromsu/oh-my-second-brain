@@ -115,4 +115,42 @@ describe("atomicWriteNote", () => {
     await expect(atomicWriteNote(target, "new", undefined, { link: broken })).rejects.toThrow(/disk gone/);
     expect(await readdir(dir)).toEqual([]);
   });
+  it("leaves an existing note untouched when the source witness changes", async () => {
+    const target = path.join(dir, "a.md");
+    await writeFile(target, "old");
+    expect(await atomicWriteNote(target, "next", "old", {}, async () => false)).toBe("source-changed");
+    expect(await readFile(target, "utf8")).toBe("old");
+    expect(await readdir(dir)).toEqual(["a.md"]);
+  });
+
+  it("rechecks the target after asynchronous source validation", async () => {
+    const target = path.join(dir, "a.md");
+    await writeFile(target, "old");
+    const validateSource = async (): Promise<boolean> => {
+      await writeFile(target, "concurrent user edit");
+      return true;
+    };
+    expect(await atomicWriteNote(target, "next", "old", {}, validateSource)).toBe("changed");
+    expect(await readFile(target, "utf8")).toBe("concurrent user edit");
+    expect(await readdir(dir)).toEqual(["a.md"]);
+  });
+
+  it("revalidates sources after a failed link before falling back to rename", async () => {
+    const target = path.join(dir, "a.md");
+    let current = true;
+    const unsupported = async (): Promise<void> => {
+      current = false;
+      throw Object.assign(new Error("not supported"), { code: "ENOTSUP" });
+    };
+    expect(await atomicWriteNote(target, "new", undefined, { link: unsupported }, async () => current)).toBe("source-changed");
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  it("allows a stable source through the rename fallback", async () => {
+    const target = path.join(dir, "a.md");
+    const unsupported = async (): Promise<void> => { throw Object.assign(new Error("not supported"), { code: "ENOTSUP" }); };
+    expect(await atomicWriteNote(target, "new", undefined, { link: unsupported }, async () => true)).toBe("written");
+    expect(await readFile(target, "utf8")).toBe("new");
+  });
+
 });

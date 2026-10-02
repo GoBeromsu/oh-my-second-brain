@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { syncEngineStore } from "../kernel/engine/embed/sync.js";
+import { readDocumentSource } from "../kernel/engine/embed/source.js";
+import { chunkDocument } from "../kernel/engine/embed/chunker.js";
 import { engineStorePath } from "../kernel/engine/paths.js";
 import { runServeHttp, type ServeHttpServer } from "./serve-http.js";
 import { createEngineSession } from "./engine-session.js";
@@ -128,23 +130,18 @@ describe("serve HTTP transport", () => {
         path.join(tmpVault, "references", "WAL Only.md"),
         "# WAL Only\n\nwalexclusive committed content.\n",
       );
+      const document = await readDocumentSource(tmpVault, "references/WAL Only.md");
+      const chunk = chunkDocument("references/WAL Only.md", document.content)[0]!;
       const insert = writer.transaction(() => {
         const result = writer.prepare(
           "INSERT INTO engine_chunk_meta (doc_path, ordinal, text, sha) VALUES (?, ?, ?, ?)",
-        ).run(
-          "references/WAL Only.md",
-          0,
-          "WAL Only walexclusive committed content",
-          "wal-only-sha",
-        );
+        ).run(chunk.docPath, chunk.ordinal, chunk.text, chunk.sha);
         writer.prepare(
           "INSERT INTO engine_chunk_fts (rowid, doc_path, ordinal, text) VALUES (?, ?, ?, ?)",
-        ).run(
-          Number(result.lastInsertRowid),
-          "references/WAL Only.md",
-          0,
-          "WAL Only walexclusive committed content",
-        );
+        ).run(Number(result.lastInsertRowid), chunk.docPath, chunk.ordinal, chunk.text);
+        writer.prepare(
+          "INSERT INTO engine_document_source (doc_path, version, fingerprint, content_sha256, chunker) VALUES (?, 1, ?, ?, ?)",
+        ).run(chunk.docPath, document.source.fingerprint, document.source.contentSha256, document.source.chunker);
       });
       insert();
       const before = await vaultSnapshot(tmpVault);
@@ -295,6 +292,24 @@ describe("serve HTTP transport", () => {
     expect(await vaultSnapshot(tmpVault)).toEqual(afterSync);
   });
 
+  it("searches sequential live edits without synchronizing or changing the persistent index", async () => {
+    tmpVault = await writeVault();
+    modelCacheDir = await mkdtemp(path.join(tmpdir(), "oms-http-model-cache-"));
+    await syncEngineStore({ vault: tmpVault, embed: false });
+    const persisted = await readFile(engineStorePath(tmpVault));
+    httpServer = await runServeHttp({ vault: tmpVault, port: 0, modelCacheDir, modelEnv: {} });
+    expect((await jsonFetch(`${httpServer.url}/search`, { query: "retrieval" })).available).toBe(true);
+    const editedPath = path.join(tmpVault, "references", "Agent Retrieval.md");
+    for (const word of ["typingalpha", "typingbeta", "typinggamma"]) {
+      await writeFile(editedPath, `# ${word}\n${word} is now present.\n`);
+      const result = await jsonFetch(`${httpServer.url}/search`, { query: word });
+      expect(result).toMatchObject({ available: true, totalCount: 1, receipt: { indexDrift: false } });
+      expect(result.hits).toEqual([expect.objectContaining({ title: word, snippet: expect.stringContaining(word) })]);
+    }
+    expect((await jsonFetch(`${httpServer.url}/search`, { query: "retrieval" })).hits).toEqual([]);
+    expect(await readFile(engineStorePath(tmpVault))).toEqual(persisted);
+  });
+
   it("never disposes a caller-owned injected adapter", async () => {
     tmpVault = await writeVault();
     modelCacheDir = await mkdtemp(path.join(tmpdir(), "oms-http-model-cache-"));
@@ -400,4 +415,42 @@ describe("serve HTTP transport", () => {
       reason: "Unknown OMS search HTTP endpoint.",
     });
   });
+});
+
+it("transports observed-only discovery and its cursor without changing vault bytes", async () => {
+  tmpVault = await writeVault();
+  await writeFile(path.join(tmpVault, "references", "Agent Retrieval.md"), "---\nsubject: [science, research]\n---\nneedle\n");
+  modelCacheDir = await mkdtemp(path.join(tmpdir(), "oms-http-model-cache-"));
+  const before = await vaultSnapshot(tmpVault);
+  httpServer = await runServeHttp({ vault: tmpVault, port: 0, modelCacheDir, modelEnv: {} });
+  const first = await jsonFetch(`${httpServer.url}/search`, { limit: 0, observed: { discover: { key: "subject", limit: 1 } } });
+  expect(first).toMatchObject({ available: true, hits: [], observed: { discovery: { values: [{ value: "research", count: 1 }] } } });
+  const cursor = (first["observed"] as { discovery: { cursor: string } }).discovery.cursor;
+  const second = await jsonFetch(`${httpServer.url}/search`, { query: "needle", limit: 0, observed: { discover: { key: "subject", limit: 1, cursor } } });
+  expect(second).toMatchObject({ available: true, observed: { discovery: { values: [{ value: "science", count: 1 }], cursor: null } } });
+  await expectBadRequest(`${httpServer.url}/search`, { observed: { discover: { limit: 101 } } }, /observed.*limit/i);
+  await expectBadRequest(`${httpServer.url}/search`, { vec: "needle", observed: { discover: {} } }, /lexical queries only/i);
+  expect(await vaultSnapshot(tmpVault)).toEqual(before);
+});
+
+it("round-trips exact facet selections over HTTP without date/string/number or boolean/string coercion", async () => {
+  tmpVault = await writeVault();
+  modelCacheDir = await mkdtemp(path.join(tmpdir(), "oms-http-model-cache-"));
+  const cases = [
+    ["string", '"2026-01-01T00:00:00.000Z"'],
+    ["number", "1767225600000"], ["boolean", "false"], ["boolean-string", '"false"'],
+  ] as const;
+  for (const [name, value] of cases) await writeFile(path.join(tmpVault, "references", `${name}.md`), `---\nwhen: ${value}\n---\nneedle\n`);
+  await writeFile(path.join(tmpVault, "references", "mixed.md"), '---\nwhen: ["2026-01-01T00:00:00.000Z", 1767225600000, false, "false"]\n---\nneedle\n');
+  httpServer = await runServeHttp({ vault: tmpVault, port: 0, modelCacheDir, modelEnv: {} });
+  const found = await jsonFetch(`${httpServer.url}/search`, { limit: 0, observed: { discover: { key: "when" } } });
+  const facets = (found["observed"] as { discovery: { values: { valueType: string; value: string | number | boolean; selection: unknown; count: number }[] } }).discovery.values;
+  expect(facets).toHaveLength(4);
+  for (const facet of facets) {
+    const selected = await jsonFetch(`${httpServer.url}/search`, { observed: { field: { when: facet.selection } } });
+    const leaf = facet.valueType === "string" ? facet.value === "false" ? "boolean-string" : "string" : facet.valueType;
+    expect((selected["hits"] as { path: string }[]).map(hit => hit.path).sort()).toEqual([`references/${leaf}.md`, "references/mixed.md"].sort());
+    expect(selected["totalCount"]).toBe(facet.count);
+  }
+  await expectBadRequest(`${httpServer.url}/search`, { observed: { field: { when: { exact: { valueType: "date", value: "2026-02-31T00:00:00.000Z" } } } } }, /canonical ISO/i);
 });

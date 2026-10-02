@@ -1,6 +1,7 @@
 export function searchUsage(): string {
   return `OMS search:
   oms search <text> [--mode query|search|vsearch] [--lex <text>] [--vec <text>] [--hyde <text>] [--expand] [--max-queries <1..32>] [--rerank|--no-rerank] [-n <limit>]
+  oms search [<text>] --observed '<JSON field/discover object>' [-n <limit>]
   oms search --path <vault-relative path> [--vault <path>]
   oms search --context [--template <id>] [--folder <path>] [--property <name> --value <value>] [--wikilink <target>] [--query <text>]
   oms search --link <note> [--folder <name>] [--json] [--vault <path>]
@@ -16,6 +17,11 @@ Use \`oms search -- <text>\` when the text itself starts with a flag or is the w
 --path reads one note exactly, without opening the index or loading a model. It matches the
 path NFC-insensitively, refuses .. and paths that escape the vault, prints the on-disk path and a
 sha256 revision, and cannot be combined with a subcommand, query text, or mode flags.
+
+--observed supplies explicit current-note frontmatter filters and bounded discovery, independently
+of declared --field axes. Example: --observed '{"field":{"subject":"science"},"discover":{"key":"subject","limit":20}}'.
+Omit discover.key to list keys; -n 0 returns discovery without note hits. Discovery cursors belong
+inside the observed.discover object; ordinary --cursor continues note hits.
 
 A plain search is lexical-only. --lex, --vec, and --hyde select explicit typed channels.
 --expand selects only {kind:'expand',profile:'qmd-v2.8.3',maxQueries?}; --max-queries must be

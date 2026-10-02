@@ -23,7 +23,7 @@ function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): Record<st
 }
 
 describe("Oh My Second Brain MCP semantic stdio server", () => {
-  it("reopens the read-only index on every request in one MCP session", async () => {
+  it("refreshes live lexical edits and externally replaced indexes in one MCP session", async () => {
     const vault = await writeMorningVaultFixture();
     const testCache = await mkdtemp(path.join(tmpdir(), "oms-semantic-cache-"));
     await mkdir(testCache, { recursive: true });
@@ -48,6 +48,12 @@ describe("Oh My Second Brain MCP semantic stdio server", () => {
       expect((before.hits as unknown[]).length).toBe(0);
 
       await writeFile(path.join(vault, "references", "Freshness.md"), "---\ntemplate: reference\ntitle: Freshness\nsource-url: https://example.com/freshness\ntags: []\n---\n\nfreshness-marker\n");
+      const unsynced = textPayload(await client.callTool({
+        name: "search",
+        arguments: { op: "query", query: "freshness-marker", collection: "obsidian" },
+      }));
+      expect(unsynced.available).toBe(true);
+      expect((unsynced.hits as Array<{ path?: string }>).some(hit => hit.path === "references/Freshness.md")).toBe(true);
       await execFileAsync(process.execPath, [distCli, "doctor", "sync-embeddings", "--mode", "sync", "--vault", vault], {
         cwd: repoRoot,
         env: {

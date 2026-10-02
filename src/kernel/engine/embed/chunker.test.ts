@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { chunkDocument } from "./chunker.js";
 import { UNTITLED_DOCUMENT_TITLE } from "../types.js";
 
@@ -8,6 +8,21 @@ function longBody(): string {
 }
 
 describe("chunkDocument", () => {
+  it("accounts for short-line token weight without rescanning prior text", () => {
+    const raw = Array.from({ length: 1000 }, (_, index) => `item ${index}`).join("\n");
+    const iterate = String.prototype[Symbol.iterator];
+    let traversed = 0;
+    const spy = vi.spyOn(String.prototype, Symbol.iterator).mockImplementation(function (this: string) {
+      traversed += this.length;
+      return iterate.call(this);
+    });
+    try { chunkDocument("short-lines.md", raw); }
+    finally { spy.mockRestore(); }
+    // No YAML or other character iterator is involved in this fixture. Token
+    // accounting may visit the input, but not repeatedly revisit its prefix.
+    expect(traversed).toBeLessThanOrEqual(raw.length);
+  });
+
   it("produces at least one chunk for non-empty text", () => {
     const chunks = chunkDocument("notes/test.md", "Hello world\nThis is a test.");
     expect(chunks.length).toBeGreaterThan(0);

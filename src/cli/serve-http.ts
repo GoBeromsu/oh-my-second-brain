@@ -1,3 +1,5 @@
+import { normalizeQueryOptions } from "../kernel/engine/mcp/query-mapper.js";
+import { observedQueryOptions } from "../kernel/engine/axes/observed-options.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
@@ -7,6 +9,11 @@ import type {
   SemanticTypedSearch,
 } from "../kernel/search/semantic-contract.js";
 import type { McpSemanticExpandStrategy } from "../kernel/engine/mcp/types.js";
+import { LiveLexicalSession } from "../kernel/engine/embed/live-lexical.js";
+import { startIndexMaintenance, type IndexMaintenance } from "../kernel/engine/index-maintenance.js";
+import type { MaintenanceMode } from "../kernel/engine/maintenance-controller.js";
+import type { WriteTargetSource } from "../kernel/conventions/write-protocol.js";
+import { requiresEmbeddings } from "../kernel/searchbackend/engine-search-backend.js";
 import { createEngineSession } from "./engine-session.js";
 
 export interface ServeHttpServer {
@@ -16,6 +23,8 @@ export interface ServeHttpServer {
 
 export interface ServeHttpOptions {
   readonly vault: string;
+  readonly source?: WriteTargetSource;
+  readonly maintenance?: MaintenanceMode;
   readonly index?: string;
   readonly host?: string;
   readonly port?: number;
@@ -29,6 +38,8 @@ export interface ServeHttpOptions {
 
 interface RouteContext {
   readonly vault: string;
+  readonly maintenance?: IndexMaintenance;
+  readonly lexicalSession?: LiveLexicalSession;
   readonly index?: string;
   readonly adapter?: McpEngineAdapter;
   readonly modelCacheDir?: string;
@@ -121,7 +132,7 @@ function stringArrayField(value: Record<string, unknown>, key: string): string[]
 
 const SEARCH_FIELDS = new Set([
   "query", "strategy", "searches", "collection", "limit", "minScore", "intent",
-  "candidateLimit", "rerank", "lex", "vec", "hyde",
+  "candidateLimit", "rerank", "lex", "vec", "hyde", "observed", "collectionPath",
 ]);
 const GET_FIELDS = new Set([
   "target", "collection", "fromLine", "lineCount", "lineNumbers", "fullPath",
@@ -170,20 +181,25 @@ function queryOptions(ctx: RouteContext, mode: SemanticSearchMode, body: unknown
   const lex = stringField(record, "lex");
   const vec = stringField(record, "vec");
   const hyde = stringField(record, "hyde");
-  if (query === undefined && searches === undefined && lex === undefined && vec === undefined && hyde === undefined) {
+  let observed;
+  try { observed = observedQueryOptions(record["observed"]); }
+  catch (error) { throw new HttpInputError(error instanceof Error ? error.message : String(error)); }
+  if (query === undefined && searches === undefined && lex === undefined && vec === undefined && hyde === undefined && observed === undefined) {
     throw new HttpInputError('Search requires one of "query", "searches", "lex", "vec", or "hyde".');
   }
   if (query !== undefined && searches !== undefined) {
     throw new HttpInputError('Fields "query" and "searches" are mutually exclusive.');
   }
-  return {
+  const options = {
     vault: ctx.vault,
+    ...(observed === undefined ? {} : { observed }),
     index: ctx.index,
     mode,
     query,
     strategy: strategyField(record),
     searches,
     collection: stringField(record, "collection"),
+    collectionPath: stringField(record, "collectionPath"),
     limit: numberField(record, "limit"),
     minScore: numberField(record, "minScore"),
     intent: stringField(record, "intent"),
@@ -193,15 +209,22 @@ function queryOptions(ctx: RouteContext, mode: SemanticSearchMode, body: unknown
     vec,
     hyde,
   };
+  if (observed !== undefined) {
+    try { normalizeQueryOptions(options); }
+    catch (error) { throw new HttpInputError(error instanceof Error ? error.message : String(error)); }
+  }
+  return options;
 }
 
 async function withRequestAdapter<T>(
   ctx: RouteContext,
   operation: (adapter: McpEngineAdapter) => Promise<T>,
+  liveLexical = false,
 ): Promise<T> {
   if (ctx.adapter !== undefined) return operation(ctx.adapter);
   const session = createEngineSession(ctx.vault, {
     write: false,
+    ...(liveLexical && ctx.lexicalSession !== undefined ? { liveLexical: ctx.lexicalSession } : {}),
     modelCacheDir: ctx.modelCacheDir,
     modelEnv: ctx.modelEnv,
   });
@@ -235,6 +258,7 @@ async function routeRequest(ctx: RouteContext, request: IncomingMessage, respons
         ok: status.available,
         storage: status.available ? status.storage : "oms-native-json",
         status,
+        ...(ctx.maintenance === undefined ? {} : { maintenance: ctx.maintenance.status() }),
       });
       return;
     }
@@ -244,6 +268,7 @@ async function routeRequest(ctx: RouteContext, request: IncomingMessage, respons
       sendJson(response, 200, await withRequestAdapter(
         ctx,
         (adapter) => adapter.semanticQuery(options),
+        !requiresEmbeddings(options),
       ));
       return;
     }
@@ -297,9 +322,10 @@ async function routeRequest(ctx: RouteContext, request: IncomingMessage, respons
 export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpServer> {
   const host = safeHost(opts.host);
   const port = opts.port ?? 8765;
+  if (opts.maintenance !== undefined && (opts.adapter !== undefined || opts.index !== undefined)) throw new Error("Automatic maintenance requires the canonical vault index and a server-owned adapter.");
   // Verify the normal engine path before listening, then release its immutable
-  // snapshot. Each request acquires a fresh read-only snapshot so external index
-  // syncs become visible without sharing or disposing another request's engine.
+  // snapshot. Vector/status requests retain request-owned persistent snapshots;
+  // lexical queries use the generation-aware detached session created below.
   if (opts.adapter === undefined) {
     const readiness = createEngineSession(opts.vault, {
       write: false,
@@ -308,8 +334,14 @@ export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpSer
     });
     await readiness.dispose();
   }
+  const lexicalSession = opts.adapter === undefined ? new LiveLexicalSession({ vault: opts.vault }) : undefined;
+  let maintenance: IndexMaintenance | undefined;
+  try { maintenance = await startIndexMaintenance({ vault: opts.vault, source: opts.source, mode: opts.maintenance, modelCacheDir: opts.modelCacheDir, modelEnv: opts.modelEnv }); }
+  catch (error) { await lexicalSession?.dispose(); throw error; }
   const ctx: RouteContext = {
     vault: opts.vault,
+    maintenance,
+    lexicalSession,
     index: opts.index,
     adapter: opts.adapter,
     modelCacheDir: opts.modelCacheDir,
@@ -327,19 +359,34 @@ export async function runServeHttp(opts: ServeHttpOptions): Promise<ServeHttpSer
       });
     });
   } catch (error) {
+    await Promise.all([maintenance?.stop(), lexicalSession?.dispose()]);
     throw error;
   }
   const address = server.address();
   const actualPort = typeof address === "object" && address ? (address as AddressInfo).port : port;
   const urlHost = host === "::1" ? "[::1]" : host;
+  let closing: Promise<void> | undefined;
   return {
     url: `http://${urlHost}:${actualPort}`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
+    close: () => closing ??= (async () => {
+      // Cancel writers immediately. An unfinished HTTP body must not defer the
+      // maintenance cancellation deadline or allow new commits during shutdown.
+      const stopped = maintenance?.stop();
+      let forceClose: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const drained = new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) reject(error);
+            else resolve();
+          });
         });
-      }),
+        if (maintenance !== undefined) forceClose = setTimeout(() => server.closeAllConnections(), 5000);
+        await Promise.all([drained, stopped]);
+      } finally {
+        if (forceClose !== undefined) clearTimeout(forceClose);
+        if (maintenance !== undefined) server.closeAllConnections();
+        await lexicalSession?.dispose();
+      }
+    })(),
   };
 }

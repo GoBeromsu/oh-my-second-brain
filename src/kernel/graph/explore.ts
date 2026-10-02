@@ -1,7 +1,7 @@
 import path from "node:path";
 import { engineGraphCachePath, engineNodeCachePath } from "../engine/paths.js";
 import { exploreEngineGraph, type EngineGraphConnectionReason, type EngineGraphExploreNode } from "../engine/graph/explore.js";
-import { buildGraph, buildNodeIndex, loadCachedGraph, loadNodeIndex, nodeSourceSignature } from "../engine/graph/builder.js";
+import { buildGraph, buildNodeIndex, loadCachedGraph, loadNodeIndexForVault } from "../engine/graph/builder.js";
 import type { AxisScalar } from "../engine/graph/node.js";
 import { readSearchTemplateSource } from "../engine/retrieval/template-source.js";
 
@@ -86,11 +86,10 @@ function toLocalNode(node: EngineGraphExploreNode): GraphExploreNode {
 
 export async function exploreLocalGraph(opts: GraphExploreOptions): Promise<GraphExploreResult> {
   const meta = await readSearchTemplateSource(opts.vault);
-  const sourceSignature = await nodeSourceSignature(opts.vault, meta);
   const projectionSignature = meta.digest;
   const cacheAllowed = opts.useCache !== false;
   const cachedNodes = cacheAllowed
-    ? await loadNodeIndex(engineCachePath(opts.vault, "node-index.json"), sourceSignature, projectionSignature)
+    ? await loadNodeIndexForVault(engineCachePath(opts.vault, "node-index.json"), opts.vault, meta)
     : null;
   const cachedEdges = cacheAllowed
     ? await loadCachedGraph(engineCachePath(opts.vault, "graph.json"), projectionSignature)

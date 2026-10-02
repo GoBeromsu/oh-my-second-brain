@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve, relative } from "node:path";
+import { parseNpmPackManifest } from "./npm-pack-manifest.mjs";
 
 const root = resolve(process.argv[2] ?? process.cwd());
 const violations = [];
@@ -54,11 +55,9 @@ function packagedFiles() {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
   });
-  const result = JSON.parse(output);
-  if (!Array.isArray(result) || result.length !== 1 || !Array.isArray(result[0]?.files)) {
-    throw new Error(`npm pack --dry-run --json returned an unexpected file manifest for ${root}.`);
-  }
-  return new Set(result[0].files.map((file) => file.path));
+  const { name } = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+  const pack = parseNpmPackManifest(output, name);
+  return new Set(pack.files.map((file) => file.path));
 }
 
 /**

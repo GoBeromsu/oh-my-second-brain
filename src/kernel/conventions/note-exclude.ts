@@ -308,6 +308,9 @@ export async function managedSourceExclusionMatcher(
     } catch {
       return false;
     }
+    // With no canonical sources or template roots an alias cannot match. Keep
+    // lexical exclusions and authoritative-channel validation above this fast path.
+    if (resolved.size === 0 && inventory.roots.length === 0) return false;
     const actual = await resolveAlias(root, notePath);
     if (actual === null) return false;
     // An alias into the template root is a template, wherever it is linked from.

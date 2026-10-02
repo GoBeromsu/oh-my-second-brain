@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       rehearsal:
-        description: "Rehearsal run: full pipeline with a dry-run publish and no GitHub Release"
+        description: "Verification only: manual runs never publish, regardless of this value"
         required: false
         default: true
         type: boolean
@@ -17,12 +17,13 @@ on:
         type: string
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
-  release:
+  verify:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       OMS_REQUIRE_PLUGIN_VALIDATION: "1"
       OMS_PLUGIN_VALIDATION_ATTESTATION: ${{ inputs.plugin_validation_attestation }}
@@ -36,12 +37,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
 
       - name: Guard tag matches every version carrier
         if: github.ref_type == 'tag'
@@ -98,8 +100,30 @@ jobs:
 
       - run: npm run release:check
 
+  publish:
+    # Dispatch is verification-only, including dispatch on an existing tag.
+    if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/oms-v') && needs.verify.result == 'success'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Rebuild the exact commit verified above; no cross-job artifact is trusted.
+      - run: npm ci
+      - run: npm run build
+
       - name: Publish to npm with provenance
-        if: github.ref_type == 'tag'
         # Authentication comes from npm Trusted Publishing via GitHub OIDC.
         run: |
           set -euo pipefail
@@ -119,34 +143,7 @@ jobs:
               ;;
           esac
 
-      - name: Dry-run publish (rehearsal)
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          set -uo pipefail
-          # A rehearsal runs on the CURRENT version, which is normally already on the
-          # registry. `npm publish --dry-run` still performs the server-side
-          # "cannot publish over previously published versions" precondition check, so
-          # that one specific error is the expected rehearsal outcome, not a failure.
-          # Every other error (packing, auth, manifest) must still fail the job.
-          set +e
-          out=$(npm publish --dry-run --access public 2>&1)
-          rc=$?
-          set -e
-          echo "$out"
-          if [ "$rc" -eq 0 ]; then
-            echo "[rehearsal] npm publish --dry-run succeeded"
-            exit 0
-          fi
-          V=$(node -p "require('./package.json').version")
-          if echo "$out" | grep -qF "You cannot publish over the previously published versions: $V"; then
-            echo "[rehearsal] npm publish --dry-run reached the registry precondition for the already-published version $V - packaging verified, publish correctly refused"
-            exit 0
-          fi
-          echo "::error::rehearsal dry-run publish failed for a reason other than the already-published guard"
-          exit "$rc"
-
       - name: Create GitHub Release
-        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

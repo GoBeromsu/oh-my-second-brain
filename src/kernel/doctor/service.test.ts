@@ -18,6 +18,9 @@ import * as vaultIdModule from "../contract/vault-id.js";
 import { resolveSealState } from "../contract/vault-id.js";
 import { serializeVaultSettings } from "../vault/settings.js";
 import { syncEngineStore } from "../engine/embed/sync.js";
+import { makeEmbeddingIdentity } from "../engine/embed/identity.js";
+import { openEngineStoreCore } from "../engine/embed/store.js";
+import { createHashProjectionProvider } from "../engine/embed/hash-stub.test-helper.js";
 import { listDirtyQueue, updateKeywordIndex } from "../engine/index-update.js";
 import { repairDoctor, type DoctorHuman } from "./service.js";
 import { readEvolutionEvents } from "../evolution/events.js";
@@ -384,8 +387,16 @@ describe("doctor sync-embeddings drains the write queue", () => {
     const vault = await queuedVault();
     const engine = assembleCoreSemanticEngine({ vault });
     try {
-      // A lexical pass rewrites the re-marked digests, which is what a real re-embed leaves behind.
-      const sync = vi.spyOn(engine.adapter, "syncEmbeddings").mockImplementation(async options => ({ ...(await syncEngineStore({ ...options, embed: false })), available: true }));
+      const identity = makeEmbeddingIdentity({ provider: "gguf", model: "test-model", revision: "r1", sha256: "a".repeat(64), dimensions: 2, contextLength: 2048, mrlDim: 0, normalization: "l2", prefixScheme: "test-prefix" });
+      const store = openEngineStoreCore(engineStorePath(vault));
+      store.writeEmbeddingIdentity(identity);
+      store.close();
+      const sync = vi.spyOn(engine.adapter, "syncEmbeddings").mockImplementation(async options => syncEngineStore({
+        ...options, embed: true, embeddingProvider: identity.provider, embeddingModel: identity.model,
+        embeddingRevision: identity.revision, embeddingSha256: identity.sha256, embeddingDimensions: identity.dimensions,
+        embeddingContext: identity.contextLength, embeddingMrlDim: identity.mrlDim, embeddingNormalization: identity.normalization,
+        embeddingPrefixScheme: identity.prefixScheme, embeddingProviderInstance: createHashProjectionProvider(2),
+      }));
       const result = await repairDoctor({ operation: "sync-embeddings", vault, source: "vault", resolveAdapter: () => engine.adapter });
       expect(sync).toHaveBeenCalledTimes(1);
       expect(result).toMatchObject({ kind: "completed", value: { queue: { drained: 1, pending: 0 } } });

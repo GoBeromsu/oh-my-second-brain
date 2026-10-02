@@ -31,19 +31,22 @@ Both run one pipeline: frame the target, conform mechanically (template variable
 
 - Overwriting an existing note needs `ifMatch` (`--if-match`) set to its current `sha256:` revision; without it nothing is written and the result is `WRITE_IF_MATCH_REQUIRED`. A stale revision returns the retryable `WRITE_TARGET_CHANGED`; `ifMatch` for a note that does not exist returns the retryable `WRITE_TARGET_ABSENT` (retry without it to create the note). A note removed after it was judged returns the retryable `WRITE_TARGET_VANISHED`; nothing is written.
 - `check` (`--check`) judges and returns the frame, the current revision, and the `refusals`, `warnings`, and `fixes` without touching disk, the engine store or the contract store.
-- A written note returns the receipt `{ok, path, revision, contractRevision, index: {keyword, vector}, conformed, missingDefaults, warnings, fixes, next?}`. `next` is the one command to run next for the first warning (`oms interview` for a `contract-open` vault, `oms doctor status` for a note's rule warnings) and is absent when there are no warnings. `warnings` is the note's full `{field, kind}` warning set, not only the new ones, left after the fixes; `fixes` lists the `{field, kind}` of each warning a lossless fix cleared. `index.keyword` is `updated` when an engine store exists, `skipped` when none does (the write never creates one), and `failed` when the store could not be updated; the note is written in every case. `index.vector` is `pending` after a keyword update, until `oms doctor sync-embeddings --mode embed` drains the queue, and `disabled` otherwise.
+- A written note returns the receipt `{ok, path, revision, contractRevision, index: {keyword, vector}, conformed, missingDefaults, warnings, fixes, next?}`. `next` is the one command to run next for the first warning (`oms interview` for a `contract-open` vault, `oms doctor status` for a note's rule warnings) and is absent when there are no warnings. `warnings` is the note's full `{field, kind}` warning set, not only the new ones, left after the fixes; `fixes` lists the `{field, kind}` of each warning a lossless fix cleared. `index.keyword` is `updated` when an engine store exists, `skipped` when none does (the write never creates one), and `failed` when the store could not be updated; the note is written in every case. `index.vector` is `pending` after a keyword update, until `oms doctor sync-embeddings --mode embed` or an explicitly enabled full-maintenance server drains the queue, and `disabled` otherwise.
 
 ## Search
 
 | CLI | MCP tool | `op` | Required discriminator |
 |---|---|---|---|
 | `oms search <text>` | `oms_search` | `query` | Optional explicit `mode=query|search|vsearch`; typed `searches` and lexical/vector/HyDE shorthand omit `mode`. After a `--` terminator the CLI reads every token, including `--vault`, as query text. |
+| `oms search [<text>] --observed '<JSON field/discover object>' [-n 0]` | `oms_search` | `query` | Explicit `observed: {field?, discover?}`; text is optional, and `limit: 0` returns bounded discovery without hits. |
 | `oms search --context` | `oms_search` | `context` | none |
 | `oms search --path <rel>` | `oms_search` | absent | `path` alone; exclusive with `op` and every other argument, except `limit: 10`, `rerank: false` and `minScore: 0`, the schema defaults some clients echo on every call. Engine-free, normalization-insensitive exact read of one note, refused with `READ_EXACT_TOO_LARGE` above 16 MiB. A `--path` after a `--` terminator is query text, not the flag. |
 | `oms search --link <note>` | `oms_search` | `link` | `notePath` required, `folder` optional. Suggests wikilinks without writing them. Refused when combined with a `--` terminator. |
 | none | `oms_search` | `templates` | List the live templates in `templateFolder` as template axes. Reports `unavailable` when no contract is sealed. |
 | none | `oms_search` | `get-document` | `target` XOR `targets` XOR (`notePath` and window). |
 | `oms doctor status --view status|collections|contexts` | `oms_search` | `index-status` | `view=status|collections|contexts`; the CLI also takes `--index <path>` and `--collection <name>`. Read-only; never creates a store. |
+
+For read-before-edit, use MCP `search {path: "note.md"}` without `op`, or CLI `oms search --path note.md`. Both return the complete source in `documents[0].content` and its current `sha256:` byte revision in `documents[0].revision`. Supply that revision as `write.ifMatch` (CLI `--if-match`). The separate MCP `get-document` operation is for document retrieval, including slices and batches, and does not return an overwrite revision. On `WRITE_TARGET_CHANGED`, reread the complete note and reconcile the requested edit before retrying.
 
 A plain `oms search <text>` is lexical-only. Search is independent of the contract: lexical, vector, HyDE, and typed-axis queries still include notes that would fail it, and a missing or damaged contract does not stop search. Search does not write notes and does not create an engine store.
 
@@ -88,7 +91,7 @@ Every mutating doctor op requires verified-target admission and returns a receip
 
 | CLI | Purpose |
 |---|---|
-| `oms serve mcp|http` | Start MCP or HTTP without creating a vault engine store at startup. |
+| `oms serve mcp|http` | Start MCP or HTTP without creating a vault engine store at startup. Optional `--maintenance lexical|full` starts an explicit owner for an existing canonical store; otherwise no maintenance writer starts. |
 | `oms hook pre` | Judge a Claude write against the vault contract before it is saved. The Claude guard denies only a safety refusal; a write with contract findings is allowed with a warning, and a write the judge cannot run on is allowed and the failure logged. Codex and Hermes have no write hook. |
 
 OMS has no host launcher and no `--runtime gjc` command path.

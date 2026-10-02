@@ -13,7 +13,7 @@ import { readBundledPackageVersion } from "../kernel/runtime/assets.js";
 import { retrieveContextSemanticInputProperties } from "../kernel/semantic/semantic-retrieve.js";
 import { semanticQueryOptionsFromArgs } from "../kernel/semantic/semantic-retrieve-args.js";
 import {
-  assembleEphemeralCoreSemanticEngine,
+  assembleLiveLexicalEngine,
   assembleCoreSemanticEngineReadOnly,
   assembleCoreSemanticEngine,
   assembleEngineReadOnly,
@@ -24,6 +24,9 @@ import {
   assembleFullSemanticEngine,
   embeddingConfigPresent,
 } from "../kernel/semantic/semantic-engine.js";
+import { LiveLexicalSession } from "../kernel/engine/embed/live-lexical.js";
+import { startIndexMaintenance, type IndexMaintenance } from "../kernel/engine/index-maintenance.js";
+import type { MaintenanceMode } from "../kernel/engine/maintenance-controller.js";
 import type { McpEngineAdapter } from "../kernel/engine/mcp/facade.js";
 import type { Reranker } from "../kernel/engine/retrieval/reranker.js";
 import { EngineSearchBackend, requiresEmbeddings } from "../kernel/searchbackend/engine-search-backend.js";
@@ -60,8 +63,27 @@ const axisScalar = { anyOf: [string, number, boolean] };
 const axisValue = { anyOf: [axisScalar, { type: "array", items: axisScalar }] };
 const fieldPredicate = { type: "object", additionalProperties: false, properties: { contains: axisValue, containsAll: { type: "array", items: axisScalar }, in: { type: "array", items: axisScalar }, between: { type: "array", items: axisScalar, minItems: 2, maxItems: 2 }, gte: axisScalar, gt: axisScalar, lte: axisScalar, lt: axisScalar, from: axisScalar, to: axisScalar } };
 const queryAxes = { type: "object", additionalProperties: false, properties: { template: string, folder: axisValue, field: { type: "object", additionalProperties: { anyOf: [axisValue, fieldPredicate] } }, link: axisValue } };
+const observedValue = { anyOf: [axisScalar, { type: "array", items: axisScalar, maxItems: 256 }] };
+const observedExact = { oneOf: [
+  { valueType: { const: "string" }, value: { type: "string", minLength: 1 } },
+  { valueType: { const: "number" }, value: number },
+  { valueType: { const: "boolean" }, value: boolean },
+  { valueType: { const: "date" }, value: { type: "string", pattern: /^(?:[0-9]{4}|[+-][0-9]{6})-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/.source } },
+].map(properties => ({ type: "object", additionalProperties: false, required: ["valueType", "value"], properties })) };
+const observedPredicate = { ...fieldPredicate, properties: { ...fieldPredicate.properties, exact: observedExact, contains: observedValue, containsAll: { type: "array", items: axisScalar, maxItems: 256 }, in: { type: "array", items: axisScalar, maxItems: 256 } } };
+const observedQuery = { type: "object", additionalProperties: false, minProperties: 1, properties: {
+  field: { type: "object", maxProperties: 32, additionalProperties: { anyOf: [observedValue, observedPredicate] } },
+  discover: { type: "object", additionalProperties: false, properties: { key: { type: "string", minLength: 1, maxLength: 512 }, limit: { type: "integer", minimum: 1, maximum: 100 }, cursor: { type: "string", minLength: 1, maxLength: 8192 } } },
+} };
 const expandStrategy = { type: "object", additionalProperties: false, properties: { kind: { ...string, enum: ["expand"] }, profile: { ...string, enum: ["qmd-v2.8.3"] }, maxQueries: { type: "integer", minimum: 1, maximum: 32 } }, required: ["kind", "profile"] } as const;
-const searchProperties = { query: string, searches: { type: "array", maxItems: 10, items: { type: "object", additionalProperties: false, properties: { type: { ...string, enum: ["lex", "vec", "hyde"] }, query: string }, required: ["type", "query"] } }, strategy: expandStrategy, collection: string, collections: stringArray, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: { type: "integer", minimum: 0, default: 10 }, candidateLimit: { type: "integer", minimum: 1 }, rerank: { ...boolean, default: false }, minScore: { ...number, default: 0 }, cursor: string, axes: queryAxes, intent: string, lex: string, vec: string, hyde: string, index: string } as const;
+const observedCompatibility = {
+  if: { required: ["observed"] },
+  then: {
+    properties: { mode: { enum: ["query", "search"] }, strategy: false, vec: false, hyde: false, searches: { items: { properties: { type: { const: "lex" } } } } },
+    allOf: [{ if: { properties: { observed: { required: ["discover"] } } }, then: { properties: { collections: { maxItems: 0 } } } }],
+  },
+};
+const searchProperties = { query: string, searches: { type: "array", maxItems: 10, items: { type: "object", additionalProperties: false, properties: { type: { ...string, enum: ["lex", "vec", "hyde"] }, query: string }, required: ["type", "query"] } }, strategy: expandStrategy, collection: string, collections: stringArray, collectionPath: string, mode: { ...string, enum: ["query", "search", "vsearch"] }, limit: { type: "integer", minimum: 0, default: 10 }, candidateLimit: { type: "integer", minimum: 1 }, rerank: { ...boolean, default: false }, minScore: { ...number, default: 0 }, cursor: string, axes: queryAxes, observed: observedQuery, intent: string, lex: string, vec: string, hyde: string, index: string } as const;
 // Some clients echo every schema default with each call, so `search {path}` accepts these unchanged.
 export const searchPathDefaults: Readonly<Record<string, unknown>> = Object.fromEntries(
   Object.entries(searchProperties).flatMap(([field, schema]) => ("default" in schema ? [[field, schema.default]] : [])),
@@ -83,6 +105,7 @@ interface SchemaBranch {
   readonly properties: Record<string, object>;
   readonly required: readonly string[];
   readonly anyOf?: readonly { readonly required: readonly string[] }[];
+  readonly allOf?: readonly object[];
 }
 
 function schemaEqual(left: object, right: object): boolean {
@@ -154,13 +177,14 @@ function operationSchema(tool: string): Tool["inputSchema"] {
       const { searches: _explicitSearches, lex: _explicitLex, vec: _explicitVec, hyde: _explicitHyde, ...explicitModeProperties } = queryProperties;
       const { mode: _implicitMode, searches: _implicitSearches, ...implicitQueryProperties } = queryProperties;
       const { mode: _typedMode, query: _typedQuery, ...implicitTypedProperties } = queryProperties;
-      branches.push({ additionalProperties: false, properties: explicitModeProperties, required: ["op", "mode", "query"] });
-      branches.push({ additionalProperties: false, properties: implicitQueryProperties, required: ["op", "query"] });
+      branches.push({ additionalProperties: false, properties: explicitModeProperties, allOf: [observedCompatibility], required: ["op", "mode"], anyOf: [{ required: ["query"] }, { required: ["observed"] }] });
+      branches.push({ additionalProperties: false, properties: implicitQueryProperties, allOf: [observedCompatibility], required: ["op", "query"] });
       branches.push({
         additionalProperties: false,
         properties: implicitTypedProperties,
+        allOf: [observedCompatibility],
         required: ["op"],
-        anyOf: [{ required: ["searches"] }, { required: ["vec"] }, { required: ["hyde"] }],
+        anyOf: [{ required: ["searches"] }, { required: ["vec"] }, { required: ["hyde"] }, { required: ["observed"] }],
       });
       continue;
     }
@@ -210,14 +234,14 @@ export const omsMcpTools: Tool[] = [
   {
     name: "write",
     title: "Oh My Second Brain write",
-    description: "Write one note: {path, content, template?, ifMatch?, check?}. Mechanical fixes (date/title variables, date defaults, template headings) are applied, then the vault contract judges the note. Only a safety refusal denies the write, leaving the file unchanged and returning only {field, kind} refusals; anything else the note breaks is saved and listed as {field, kind} warnings in the receipt, or the note is kept as a draft (status drafted, with a draftRef) when a new gap cannot be repaired. Overwriting an existing note needs ifMatch (sha256:<rev>) from a receipt or a check; check judges and returns the frame without touching disk. A saved note returns a receipt with its revision and index state.",
+    description: "Write one note: {path, content, template?, ifMatch?, check?}. Mechanical fixes (date/title variables, date defaults, template headings) are applied, then the vault contract judges the note. Only a safety refusal denies the write, leaving the file unchanged and returning only {field, kind} refusals; anything else the note breaks is saved and listed as {field, kind} warnings in the receipt, or the note is kept as a draft (status drafted, with a draftRef) when a new gap cannot be repaired. Overwriting an existing note needs ifMatch (sha256:<rev>) from search {path} documents[0].revision, a receipt, or a check; check judges and returns the frame without touching disk. A saved note returns a receipt with its revision and index state.",
     inputSchema: operationSchema("write"),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: "search",
     title: "Oh My Second Brain search",
-    description: "Retrieve vault context, template metadata, semantic search, selected documents, and wikilink suggestions (`op: link`). `op` selects the operation. `{path}` alone reads one note by its vault-relative path, normalization-insensitively, without the index or a model.",
+    description: "Retrieve vault context, template metadata, semantic search, selected documents, and wikilink suggestions (`op: link`). `op` selects the operation. `{path}` alone reads one note by its vault-relative path, normalization-insensitively, without the index or a model, returning complete content and a byte revision in documents[0] for write.ifMatch. get-document supports slices and batches but does not return an overwrite revision.",
     inputSchema: operationSchema("search"),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
@@ -257,7 +281,7 @@ export interface OMSMcpServerOptions {
   source: WriteTargetSource;
 }
 
-export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
+export function createOMSMcpServer(opts: OMSMcpServerOptions, maintenance?: IndexMaintenance): Server {
   const vault = path.resolve(opts.vault);
   const source = opts.source;
 
@@ -293,8 +317,13 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       }));
   const getReadOnlyCoreSemanticEngine = (): AssembledEngine | null =>
     own(assembleCoreSemanticEngineReadOnly({ vault, reranker: opts.reranker }));
-  const getEphemeralCoreSemanticEngine = async (): Promise<AssembledEngine> =>
-    own(assembleEphemeralCoreSemanticEngine({ vault, reranker: opts.reranker }));
+  // This engine owns only detached core FTS state. Persistent/vector engines
+  // remain request-scoped; the lexical session checks their generation afresh.
+  let liveLexicalSession: LiveLexicalSession | undefined;
+  const getLiveLexicalEngine = (): AssembledEngine => own(assembleLiveLexicalEngine(
+    { vault, reranker: opts.reranker },
+    liveLexicalSession ??= new LiveLexicalSession({ vault }),
+  ));
   let engineMutationTail = Promise.resolve();
   let engineMutationLifecycleFailure: Error | null = null;
   const engineMutation = (request: { readonly params: { readonly name: string; readonly arguments?: unknown } }): boolean => {
@@ -349,12 +378,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     if (adapter === undefined || adapter === null) throw new SemanticIndexUnavailableError();
     return adapter;
   };
-  const resolveReadOnlyLexicalAdapter = async (): Promise<McpEngineAdapter> => {
-    const adapter = hasEmbeddingModel()
-      ? getReadOnlySemanticEngine()?.adapter
-      : getReadOnlyCoreSemanticEngine()?.adapter;
-    return adapter ?? (await getEphemeralCoreSemanticEngine()).adapter;
-  };
+  const resolveReadOnlyLexicalAdapter = async (): Promise<McpEngineAdapter> => getLiveLexicalEngine().adapter;
   const hasExplicitEmbeddingIntent = (args: Record<string, unknown> | undefined): boolean => {
     const queryOptions = semanticQueryOptionsFromArgs(vault, args);
     return requiresEmbeddings({
@@ -374,7 +398,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         if (!hasEmbeddingModel()) return getSemanticEngine().adapter;
         return resolveReadOnlyIndexAdapter();
       })()
-      : resolveReadOnlyIndexAdapter(),
+      : getLiveLexicalEngine().adapter,
     vault,
   );
 
@@ -407,9 +431,13 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
     },
   );
 
+  let closingResources: Promise<void> | undefined;
+  const disposeResources = (): Promise<void> => closingResources ??= Promise.all([maintenance?.stop(), engine.dispose(), liveLexicalSession?.dispose()]).then(() => undefined);
   server.onclose = () => {
-    void engine.dispose().catch(() => undefined);
+    void disposeResources().catch(error => { if (maintenance !== undefined) process.stderr.write(`[oms] ${error instanceof Error ? error.message : String(error)}\n`); });
   };
+  const closeServer = server.close.bind(server);
+  server.close = async () => { try { await closeServer(); } finally { await disposeResources(); } };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: omsMcpTools,
@@ -433,7 +461,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
         result = await (async () => {
     let args = isRecord(request.params.arguments) ? request.params.arguments : undefined;
     const publicName = request.params.name;
-    if (publicName === "write") return await writeNote(vault, source, args ?? {});
+    if (publicName === "write") return await writeNote(vault, source, args ?? {}, relativePath => maintenance?.notify(relativePath));
     if (publicName === "interview") return await handleInterview(ctx, args);
     if (publicName === "search") {
       const exact = await searchExactRead(vault, args, searchPathDefaults);
@@ -449,7 +477,7 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
       args = prepared.args;
     }
     if (name === "oms_graph_status") {
-      return await handleStatus(ctx, readTools());
+      return await handleStatus(ctx, readTools(), maintenance?.status());
     }
 
     try {
@@ -489,12 +517,31 @@ export function createOMSMcpServer(opts: OMSMcpServerOptions): Server {
   return server;
 }
 
-export async function runMcpServer(opts: OMSMcpServerOptions): Promise<void> {
-  const server = createOMSMcpServer(opts);
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+export async function runMcpServer(opts: OMSMcpServerOptions & { readonly maintenance?: MaintenanceMode }): Promise<void> {
+  const maintenance = await startIndexMaintenance({ vault: opts.vault, source: opts.source, mode: opts.maintenance });
+  let server: Server | undefined;
+  try {
+    server = createOMSMcpServer(opts, maintenance);
+    await server.connect(new StdioServerTransport());
+  } catch (error) { try { await server?.close(); } finally { await maintenance?.stop(); } throw error; }
+  {
+    // The SDK transport does not close itself on stdin EOF. Default read-only
+    // servers also own disposable lexical disk state that must be released.
+    let shuttingDown: Promise<void> | undefined;
+    const shutdown = (exitCode?: number): void => {
+      shuttingDown ??= server!.close();
+      void shuttingDown.catch(error => { process.stderr.write(`[oms] ${error instanceof Error ? error.message : String(error)}\n`); }).finally(() => {
+        process.stdin.off("end", onEnd); process.off("SIGINT", onInterrupt); process.off("SIGTERM", onTerminate);
+        if (exitCode !== undefined) process.exit(exitCode);
+      });
+    };
+    const onEnd = (): void => shutdown();
+    const onInterrupt = (): void => shutdown(130);
+    const onTerminate = (): void => shutdown(143);
+    process.stdin.once("end", onEnd); process.once("SIGINT", onInterrupt); process.once("SIGTERM", onTerminate);
+    if (process.stdin.readableEnded) shutdown();
+  }
   // Detached and unawaited: a slow or offline registry must not delay serving.
   // Returns null while the cache is fresh, so most boots start nothing at all.
   void scheduleUpdateNoticeRefresh({ installedVersion: SERVER_VERSION });
 }
-

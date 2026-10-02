@@ -19,13 +19,15 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { chunkDocument } from "./chunker.js";
+import { documentSourceMatches, readDocumentSource } from "./source.js";
 import { capabilityGuidance } from "./config.js";
 import { requireRealEmbeddingProvider } from "./provider.js";
 import { openEngineStore, openEngineStoreCore } from "./store.js";
 import { makeEmbeddingIdentity } from "./identity.js";
+import { acquireProcessOwner } from "../maintenance-owner.js";
 import { assertExternalDatabasePath, engineStorePath } from "../paths.js";
 import type { EmbeddingProvider } from "../types.js";
 import type { ChunkerOptions, Chunk } from "../types.js";
@@ -53,6 +55,10 @@ export interface EngineSyncOptions {
   dbPath?: string;
   /** When false, updates lexical index only (no vectors). Default: true. */
   embed?: boolean;
+  /** Per-note write maintenance: atomically queue vectors with lexical/source rows. */
+  queueDirtyAt?: string;
+  /** Ordinary note writes may maintain an existing store but never recreate it. */
+  existingOnly?: boolean;
   /** Allow destructive rebuild when embedding identity mismatches. Default: false. */
   force?: boolean;
   /** Explicit embedding provider id (OMS_EMBEDDING_PROVIDER). */
@@ -152,12 +158,12 @@ function isEnoent(error: unknown): boolean {
     (error as { code?: unknown }).code === "ENOENT";
 }
 
-export async function* walkMarkdown(dir: string, base: string): AsyncGenerator<string> {
+export async function* walkMarkdown(dir: string, base: string, options: { readonly strict?: boolean } = {}): AsyncGenerator<string> {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch (error) {
-    if (isEnoent(error)) return;
+    if (isEnoent(error) && options.strict !== true) return;
     throw new Error(`Unable to scan vault directory "${dir}": ${error instanceof Error ? error.message : String(error)}`, {
       cause: error,
     });
@@ -166,7 +172,7 @@ export async function* walkMarkdown(dir: string, base: string): AsyncGenerator<s
     if (isSkippedDirectory(entry.name)) continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      yield* walkMarkdown(fullPath, base);
+      yield* walkMarkdown(fullPath, base, options);
     } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
       yield path.relative(base, fullPath).replace(/\\/g, "/");
     }
@@ -209,7 +215,7 @@ async function* selectedMarkdownFiles(
   isExcluded: (path: string) => Promise<boolean>,
 ): AsyncGenerator<string> {
   if (files === undefined) {
-    for await (const relPath of walkMarkdown(collectionRoot, vault)) if (!(await isExcluded(relPath))) yield relPath;
+    for await (const relPath of walkMarkdown(collectionRoot, vault, { strict: true })) if (!(await isExcluded(relPath))) yield relPath;
     return;
   }
   for (const relPath of explicitMarkdownFiles(vault, collectionRelative, files)) {
@@ -237,13 +243,37 @@ function identityEquivalent(a: EmbeddingIdentity, b: EmbeddingIdentity): boolean
 /**
  * Acquire the writer lock without a dependency on a native locking package.
  *
- * A complete owner payload is published through a temporary O_EXCL inode and
- * atomically claimed with a hard link. The file records the owner PID so a
- * process killed between claim and release does not strand every future sync.
- * A live owner is always rejected (rather than silently waiting), which keeps
- * concurrent writers loud and bounded.
+ * An immutable per-attempt owner record serializes upgraded writers before
+ * they inspect or reclaim the legacy fixed-name lock. Thus a stale observer
+ * cannot rename a successor while a third upgraded writer enters the gap.
+ * Dead-process records can be reclaimed; live or unknown owners fail loudly.
  */
 export function acquireEngineStoreWriterLock(dbPath: string): () => void {
+  let owner;
+  try { owner = acquireProcessOwner(`${dbPath}.writer.owners`); }
+  catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const prefix = reason.startsWith("MAINTENANCE_OWNER_BUSY:") ? "Embedding sync is already in progress (writer lock)" : "Embedding sync writer lock unavailable";
+    throw new Error(`${prefix}: ${reason}`, { cause: error });
+  }
+  try {
+    const releaseLegacy = acquireLegacyEngineStoreWriterLock(dbPath);
+    return () => {
+      try { releaseLegacy(); }
+      finally { owner.release(); }
+    };
+  } catch (error) {
+    owner.release();
+    throw error;
+  }
+}
+
+/**
+ * Keep the legacy visible lock for older clients, but serialize all upgraded
+ * stale reclaimers with the immutable owner protocol above. Old reclaimers do
+ * not observe that protocol: concurrent mixed-version writers are unsupported.
+ */
+function acquireLegacyEngineStoreWriterLock(dbPath: string): () => void {
   const lockPath = `${dbPath}.lock`;
   const lockDir = path.dirname(lockPath);
   mkdirSync(lockDir, { recursive: true });
@@ -291,16 +321,18 @@ export function acquireEngineStoreWriterLock(dbPath: string): () => void {
         observedLockText = readFileSync(lockPath, "utf8");
         const ownerText = observedLockText.trim().split(/\r?\n/, 1)[0] ?? "";
         if (/^\d+$/.test(ownerText)) ownerPid = Number.parseInt(ownerText, 10);
-      } catch {
-        // An unreadable lock is treated as stale.
+      } catch (readError) {
+        if ((readError as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw new Error(`Embedding sync writer lock owner is unreadable; no stale recovery performed (lock: ${lockPath}).`, { cause: readError });
       }
-      if (ownerPid !== undefined && Number.isInteger(ownerPid) && ownerPid > 0) {
-        try {
-          process.kill(ownerPid, 0);
-          throw new Error(`Embedding sync is already in progress (lock: ${lockPath}).`);
-        } catch (probeErr) {
-          if ((probeErr as NodeJS.ErrnoException).code !== "ESRCH") throw probeErr;
-        }
+      if (ownerPid === undefined || !Number.isSafeInteger(ownerPid) || ownerPid <= 0) {
+        throw new Error(`Embedding sync writer lock has an invalid owner PID; inspect stopped processes before recovery (lock: ${lockPath}).`);
+      }
+      try {
+        process.kill(ownerPid, 0);
+        throw new Error(`Embedding sync is already in progress (lock: ${lockPath}).`);
+      } catch (probeErr) {
+        if ((probeErr as NodeJS.ErrnoException).code !== "ESRCH") throw probeErr;
       }
 
       // Remove exactly the stale inode that was inspected. Renaming it away
@@ -476,7 +508,7 @@ interface SyncCounters {
   skipped: number;
 }
 
-async function syncDocument(opts: {
+interface SyncDocumentOptions {
   relPath: string;
   vault: string;
   store: EngineStore;
@@ -485,76 +517,59 @@ async function syncDocument(opts: {
   chunkerOpts: Partial<ChunkerOptions> | undefined;
   counters: SyncCounters;
   rebuildAllVectors: boolean;
-}): Promise<void> {
-  let content: string;
-  try {
-    content = await readFile(path.join(opts.vault, opts.relPath), "utf-8");
-  } catch {
-    return;
-  }
+  queueDirtyAt?: string;
+}
 
-  opts.counters.scanned++;
-  const chunks: Chunk[] = chunkDocument(opts.relPath, content, opts.chunkerOpts);
+/** Reconcile only a complete scan's scope; explicit file slices never prune peers. */
+function reconcileIndexedDocuments(store: EngineStore, selected: ReadonlySet<string>, collectionRelative: string): void {
+  const known = new Set([...store.listDocPaths(), ...(store.readDocumentSources()?.keys() ?? [])]);
+  for (const docPath of known) {
+    if (isDocumentInCollection(docPath, collectionRelative) && !selected.has(docPath)) store.clearDocument(docPath);
+  }
+}
+
+async function syncDocument(opts: SyncDocumentOptions): Promise<void> {
+  const { content, source } = await readDocumentSource(opts.vault, opts.relPath, opts.chunkerOpts);
+  const chunks = chunkDocument(opts.relPath, content, opts.chunkerOpts);
   const storedShas = opts.store.getShas(opts.relPath);
-
-  const chunkCountChanged = storedShas.size !== chunks.length;
-  const fullRewrite = opts.rebuildAllVectors || chunkCountChanged;
-
-  if (!opts.shouldEmbed) {
-    // Lex-only: update meta+FTS only.
-    // When the chunk-count changes we clear and reinsert to avoid orphaned extra chunks.
-    if (fullRewrite) {
-      opts.store.clearDocument(opts.relPath);
-      opts.store.upsertLex(chunks);
-      opts.counters.added += chunks.length;
-      return;
-    }
-
-    const toUpsert: Chunk[] = [];
-    for (const chunk of chunks) {
-      const storedSha = storedShas.get(chunk.ordinal);
-      if (storedSha === chunk.sha) {
-        opts.counters.skipped++;
-        continue;
-      }
-      toUpsert.push(chunk);
-      if (storedSha === undefined) opts.counters.added++;
-      else opts.counters.updated++;
-    }
-    if (toUpsert.length > 0) opts.store.upsertLex(toUpsert);
-    return;
+  const revisions = opts.store.documentRevisions;
+  if (!revisions) throw new Error("Engine store does not support atomic document writes.");
+  const queued = revisions.read(opts.relPath);
+  const storedIdentity = opts.store.readEmbeddingIdentity()?.fingerprint;
+  const fullRewrite = opts.rebuildAllVectors || storedShas.size !== chunks.length;
+  const vectorOrdinals = opts.shouldEmbed ? opts.store.vectorOrdinals?.(opts.relPath) : undefined;
+  const changed = fullRewrite ? chunks : chunks.filter(chunk => storedShas.get(chunk.ordinal) !== chunk.sha ||
+    (opts.shouldEmbed && !vectorOrdinals?.has(chunk.ordinal)));
+  const vectors: Array<Chunk & { vector: Float32Array }> = [];
+  if (opts.shouldEmbed) {
+    if (!opts.provider) throw new Error("Internal error: shouldEmbed=true but provider is null.");
+    // Never clear existing chunks before an asynchronous provider succeeds.
+    for (const chunk of changed) vectors.push({ ...chunk, vector: await opts.provider.embed(chunk.text, chunk.title) });
   }
-
-  if (!opts.provider) {
-    throw new Error("Internal error: shouldEmbed=true but provider is null.");
-  }
-
-  // Vector path
-  if (fullRewrite) {
-    opts.store.clearDocument(opts.relPath);
-    const toUpsert: Array<Chunk & { vector: Float32Array }> = [];
-    for (const chunk of chunks) {
-      const vector = await opts.provider.embed(chunk.text, chunk.title);
-      toUpsert.push({ ...chunk, vector });
-      opts.counters.added++;
+  revisions.transaction(() => {
+    const currentShas = opts.store.getShas(opts.relPath);
+    if (!documentSourceMatches(opts.vault, opts.relPath, source) ||
+      revisions.read(opts.relPath) !== queued ||
+      opts.store.readEmbeddingIdentity()?.fingerprint !== storedIdentity ||
+      currentShas.size !== storedShas.size || [...storedShas].some(([ordinal, sha]) => currentShas.get(ordinal) !== sha)) {
+      throw new Error("Document changed before index synchronization could commit. Retry synchronization.");
     }
-    if (toUpsert.length > 0) opts.store.upsert(toUpsert);
-    return;
-  }
-
-  const toUpsert: Array<Chunk & { vector: Float32Array }> = [];
-  for (const chunk of chunks) {
-    const storedSha = storedShas.get(chunk.ordinal);
-    if (storedSha === chunk.sha) {
-      opts.counters.skipped++;
-      continue;
+    if (fullRewrite) opts.store.clearDocument(opts.relPath);
+    if (opts.shouldEmbed) {
+      if (vectors.length > 0) opts.store.upsert(vectors);
+    } else if (changed.length > 0) opts.store.upsertLex(changed);
+    opts.store.recordDocumentSource(opts.relPath, source, chunks);
+    // A lexical-only pass must not make already-pending vectors look current.
+    if (!opts.shouldEmbed && (opts.queueDirtyAt !== undefined || queued !== undefined)) {
+      revisions.queue(opts.relPath, opts.queueDirtyAt ?? new Date().toISOString());
     }
-    const vector = await opts.provider.embed(chunk.text, chunk.title);
-    toUpsert.push({ ...chunk, vector });
-    if (storedSha === undefined) opts.counters.added++;
+  });
+  opts.counters.scanned++;
+  opts.counters.skipped += chunks.length - changed.length;
+  for (const chunk of changed) {
+    if (fullRewrite || !storedShas.has(chunk.ordinal)) opts.counters.added++;
     else opts.counters.updated++;
   }
-  if (toUpsert.length > 0) opts.store.upsert(toUpsert);
 }
 
 /**
@@ -687,7 +702,8 @@ async function rebuildGenerationAtomically(opts: {
       throw new Error("Shadow embedding generation failed identity validation.");
     }
     const actualDocs = new Set(shadow.listDocPaths());
-    if (actualDocs.size !== expectedDocs.size || [...expectedDocs].some((doc) => !actualDocs.has(doc))) {
+    const sourceDocs = new Set(shadow.readDocumentSources()?.keys() ?? []);
+    if (sourceDocs.size !== expectedDocs.size || [...expectedDocs].some(doc => !sourceDocs.has(doc)) || [...actualDocs].some(doc => !expectedDocs.has(doc))) {
       throw new Error("Shadow embedding generation failed document validation.");
     }
 
@@ -800,10 +816,11 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
     if (!shouldEmbed) {
       // Lex-only path: no embedding provider required.
       if (persist) releaseLock = acquireEngineStoreWriterLock(dbPath);
-      store ??= openEngineStoreCore(dbPath);
+      store ??= openEngineStoreCore(dbPath, { fileMustExist: opts.existingOnly });
       warnings.push("embed=false: lexical index updated; no vectors generated");
 
       const counters: SyncCounters = { scanned: 0, added: 0, updated: 0, skipped: 0 };
+      const selectedPaths = new Set<string>();
       for await (const relPath of selectedMarkdownFiles(
         vault,
         collectionRoot,
@@ -811,6 +828,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
         opts.files,
         isExcluded,
       )) {
+        selectedPaths.add(relPath);
         await syncDocument({
           relPath,
           vault,
@@ -820,8 +838,11 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
           chunkerOpts: opts.chunkerOpts,
           counters,
           rebuildAllVectors: false,
+          ...(opts.queueDirtyAt === undefined ? {} : { queueDirtyAt: opts.queueDirtyAt }),
         });
       }
+
+      if (opts.files === undefined) reconcileIndexedDocuments(store, selectedPaths, collectionRelative);
 
       return {
         available: true,
@@ -1029,6 +1050,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
     // scope so finally can conditionally close it, and TS does not preserve that
     // narrowing across async worker callbacks.
     const liveStore = store;
+    const selectedPaths = new Set<string>();
     const counters: SyncCounters = { scanned: 0, added: 0, updated: 0, skipped: 0 };
     const selected = selectedMarkdownFiles(
       vault,
@@ -1038,6 +1060,7 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
       isExcluded,
     );
     await syncEmbeddingDocuments(selected, provider, async (relPath) => {
+      selectedPaths.add(relPath);
       await syncDocument({
         relPath,
         vault,
@@ -1049,6 +1072,8 @@ export async function syncEngineStore(opts: EngineSyncOptions): Promise<EngineSy
         rebuildAllVectors: false,
       });
     });
+
+    if (opts.files === undefined) reconcileIndexedDocuments(store, selectedPaths, collectionRelative);
 
     // Persist configured embedding identity only after a successful embed=true
     // incremental sync.

@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { parse as parseYaml } from "yaml";
+import { parseNpmPackManifest } from "./npm-pack-manifest.mjs";
 
 const args = new Set(process.argv.slice(2));
 const runSetup = !args.has("--mcp-only");
@@ -51,15 +52,12 @@ function run(command, commandArgs, options = {}) {
 // anyone behind a private registry or proxy, for zero isolation benefit.
 function packTarball() {
   const result = run("npm", ["pack", "--json"]);
-  let packs;
   try {
-    packs = JSON.parse(result.stdout);
+    const pack = parseNpmPackManifest(result.stdout, "oh-my-second-brain");
+    return path.resolve(pack.filename);
   } catch (error) {
-    fail(`could not parse npm pack JSON: ${error instanceof Error ? error.message : String(error)}`);
+    fail(error instanceof Error ? error.message : String(error));
   }
-  const filename = packs?.[0]?.filename;
-  if (!filename) fail("npm pack JSON did not include filename");
-  return path.resolve(filename);
 }
 
 function extractPackage(tarball, tempRoot) {

@@ -156,6 +156,8 @@ interface GGUFPool {
 
 /** Per-model runtime dimensions/context supplied by the model descriptor. */
 export interface EmbeddingRuntimeOptions {
+  /** Automatic maintenance may only use an already installed native backend. */
+  readonly localOnly?: boolean;
   readonly dimensions?: number;
   /** Canonical model context window in tokens. */
   readonly context?: number;
@@ -190,7 +192,7 @@ function runtimeOptions(
   };
 }
 
-async function loadGGUFModel(modelPath: string): Promise<LlamaModelInstance> {
+async function loadGGUFModel(modelPath: string, localOnly = false): Promise<LlamaModelInstance> {
   const { getLlama, LlamaLogLevel } = await import("node-llama-cpp");
   // Two separate stdout hazards on the MCP stdio protocol.  node-llama-cpp's
   // own logger writes info records with console.info and progress dots with
@@ -200,12 +202,17 @@ async function loadGGUFModel(modelPath: string): Promise<LlamaModelInstance> {
   // "init:" lines, which the JavaScript logger never sees, so native logging is
   // raised to error level: those records are informational and would otherwise
   // land on stdout and corrupt the frame stream.
-  const llama = await getLlama({
+  let llama: LlamaInstance;
+  try { llama = await getLlama({
+    ...(localOnly ? { build: "never" as const, skipDownload: true } : {}),
     logLevel: LlamaLogLevel.error,
     logger: (_level, message) => {
       process.stderr.write(`${message}\n`);
     },
-  });
+  }); } catch (error) {
+    if (localOnly) throw new Error("Local native embedding backend is unavailable. Install a compatible node-llama-cpp backend explicitly, then restart full maintenance; automatic maintenance does not download or build one.", { cause: error });
+    throw error;
+  }
   return llama.loadModel({ modelPath });
 }
 
@@ -230,7 +237,7 @@ export function createGGUFEmbeddingProvider(
   modelPath: string,
   dimensionsOrOptions: number | EmbeddingRuntimeOptions = GGUF_EMBEDDING_DIMENSIONS,
   contextLength?: number,
-  loadModel: GGUFModelLoader = loadGGUFModel,
+  loadModel: GGUFModelLoader = filename => loadGGUFModel(filename, typeof dimensionsOrOptions === "object" && dimensionsOrOptions.localOnly === true),
 ): QueryEmbeddingProvider {
   const runtime = runtimeOptions(dimensionsOrOptions, contextLength);
   const formatter = promptFormatter(
@@ -451,6 +458,8 @@ export type EmbeddingProviderKind = "gguf";
 
 /** Options for the production embedding factory (explicit provider + model). */
 export interface EmbeddingProviderOptions {
+  /** Disable native backend downloads/builds for automatic maintenance. */
+  localOnly?: boolean;
   /** Provider id selected by OMS_EMBEDDING_PROVIDER. */
   provider?: EmbeddingProviderKind | string;
   /** Provider-specific model identifier selected by OMS_EMBEDDING_MODEL. */
@@ -506,6 +515,7 @@ export function requireRealEmbeddingProvider(
 
   if (providerRaw === "gguf") {
     return createGGUFEmbeddingProvider(model, {
+      localOnly: opts.localOnly,
       dimensions: opts.dimensions,
       context: opts.context,
       contextLength: opts.contextLength,

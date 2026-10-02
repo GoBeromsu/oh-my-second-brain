@@ -32,6 +32,8 @@ Keep implementation and contributor-facing documentation in the same change. The
 - `tsconfig.json` excludes `**/*.test.ts`; `npm run lint` does not typecheck tests. It does typecheck the shared helpers in `test/fixtures/*.ts` through `tsconfig.fixtures.json`. Run the focused Vitest test for test changes.
 - Released changelog sections are immutable. Add entries only to the unreleased section.
 - Pull-request CI runs changelog history, install, lint, build, test, and audit. Release verification runs on `oms-v*` tags in `.github/workflows/release.yml`, not per pull request.
+- Canonical-path capture and read-count fixtures resolve temporary roots before deriving expected paths. CI reruns the node-cache, live-lexical-read/generation, projection-diagnostic, and maintenance suites with a symlinked `TMPDIR`, so alias spellings cannot silently disable injection hooks or produce false read-count failures.
+- Maintenance timing tests separate delivered watcher hints from a registered watcher that emits nothing. Injected callbacks and a fake clock verify debounce and the default periodic reconciliation independently; the real MCP owner/crash lifecycle does not assume OS event delivery within a shorter deadline.
 
 ### Documentation issue severity rubric
 
@@ -43,5 +45,7 @@ Keep implementation and contributor-facing documentation in the same change. The
 | Low | Cosmetic or alternative-usage gap with no incorrect outcome. | Non-blocking; address opportunistically. |
 
 ### Documentation decay detection
+
+Packaging checks accept the single-package JSON array used by npm 10/11 and the package-name-keyed record introduced in [npm 12](https://github.com/npm/cli/releases/tag/v12.0.0). All consumers use `scripts/npm-pack-manifest.mjs` to verify the expected package name, tarball filename, and non-empty file manifest; errors, multiple packages, and malformed reports fail closed.
 
 Run `npm run check:docs` to validate local Markdown links and conservative source-path references. When changing a surface, also use the mapping above: compare CLI help to its docs, confirm skill/tool/command registry parity, run backend conformance tests for backend changes, and keep generated host assets and manifests aligned. The checker catches broken references; it cannot infer changed behavior, so reviewers must apply the mapping table.

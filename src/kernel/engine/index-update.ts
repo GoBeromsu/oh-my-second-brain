@@ -21,7 +21,6 @@ export interface IndexUpdateDeps {
 const DEFAULT_DEPS: IndexUpdateDeps = { sync: syncEngineStore, exists: existsSync, now: () => new Date() };
 
 const DIRTY_PREFIX = "dirty:";
-const CREATE_QUEUE = "CREATE TABLE IF NOT EXISTS engine_dirty (doc_path TEXT PRIMARY KEY, queued_at TEXT NOT NULL)";
 
 function storePath(vault: string, dbPath: string | undefined): string {
   return dbPath === undefined ? engineStorePath(vault) : assertExternalDatabasePath(vault, dbPath);
@@ -73,19 +72,12 @@ export async function updateKeywordIndex(options: KeywordUpdateOptions, deps: Pa
   } catch {
     return "failed";
   }
-  // Check-then-open, deliberately unlocked: a store created after this check is picked up
-  // by the next write, and one removed between this check and the sync may be recreated
-  // by the sync. The window is the few calls before the sync takes its writer lock.
+  // The writer also uses fileMustExist: a removal after this check must not recreate it.
   if (!exists(dbPath)) return "skipped";
   try {
-    const result = await sync({ vault: options.vault, files: [options.relPath], embed: false, dbPath });
+    const result = await sync({ vault: options.vault, files: [options.relPath], embed: false, dbPath, existingOnly: true, queueDirtyAt: now().toISOString() });
     if (!result.available) return "failed";
     if (result.scanned === 0) return "skipped";
-    withWriter(dbPath, (database) => {
-      database.exec(CREATE_QUEUE);
-      database.prepare("INSERT OR REPLACE INTO engine_dirty (doc_path, queued_at) VALUES (?, ?)").run(options.relPath, now().toISOString());
-      markDirty(database, [options.relPath]);
-    });
     return "updated";
   } catch {
     return "failed";

@@ -4,6 +4,20 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- Default read-only MCP servers now close their resources on stdin EOF and termination signals, including disposable lexical disk files after a completed query. Previously that shutdown handler was installed only for opt-in maintenance servers, so ordinary client closure could leave scratch behind. Forced process termination may still leave an orphan directory.
+
+- Tool guidance identifies `search {path}` as the existing revision-bearing exact read for a subsequent `write.ifMatch`. A read/edit regression covers successful use and stale-revision refusal without changing response contracts.
+
+- An explicitly enabled server exposes maintenance status in doctor status, signals successful writes to its bounded update queue, and drains/cancels maintenance on shutdown. The four-tool surface and read-only search annotation stay unchanged.
+
+- Observed predicates accept `exact: {valueType, value}` and value facets return `selection` for direct reuse. Type/value mismatches are refused; exact date values are canonical ISO strings. Selection objects remain included in the existing serialized discovery-page budget.
+
+- `search` `op: query` accepts the distinct `observed: {field?, discover?}` namespace and returns bounded `observed.discovery` only on request. Metadata-only calls can use `limit: 0`; declared `axes.field` and ordinary response payloads are unchanged.
+
+- Live lexical servers retain only the detached index between requests. Reranker/model adapters remain request-owned, so changed installed-model defaults are resolved on the next request and caller-owned rerankers are never disposed.
+
+- **Repeated lexical queries reuse one read-only live snapshot per server.** Unsynced note edits are searchable immediately on the next stable request. The server no longer copies the entire persistent index once to probe existence and again to execute the same query; explicit vector operations retain their existing request-scoped validation.
+
 ## [0.20.6] - 2026-10-01
 
 - **The server instructions no longer call a stale `ifMatch` a safety refusal.** They listed it beside the vault boundary and a tampered contract as something that denies `write`. A missing or stale `ifMatch` is a revision precondition: it returns `WRITE_IF_MATCH_REQUIRED` or the retryable `WRITE_TARGET_CHANGED` and writes nothing, and the safety list now also names unsupported input.

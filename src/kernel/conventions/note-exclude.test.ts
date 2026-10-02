@@ -273,6 +273,15 @@ describe("readSourceExclusions", () => {
 });
 
 describe("excludedNoteMatcher", () => {
+  it("handles ordinary and missing paths without alias targets, retaining lexical exclusions", async () => {
+    const vault = await makeVault({ "notes/ordinary.md": "body" });
+    const excluded = await managedSourceExclusionMatcher(vault);
+    await expect(excluded("notes/ordinary.md")).resolves.toBe(false);
+    await expect(excluded("notes/not-created.md")).resolves.toBe(false);
+    await expect(excluded("nested/SKILL.md")).resolves.toBe(true);
+    await expect(excluded("notes/private.template.md")).resolves.toBe(true);
+  });
+
   it("applies only the built-in defaults when no sealed folder is excluded", async () => {
     const vault = await makeVault();
     await seal(vault, { folders: { notes: { meaning: "notes", searchExclude: false } } });

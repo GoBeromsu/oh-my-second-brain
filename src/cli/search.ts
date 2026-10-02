@@ -1,12 +1,6 @@
 import path from "node:path";
 
 import type { runEngineSession } from "./engine-session.js";
-import {
-  parseSearchArgs,
-  printJson,
-  searchQueryOptions,
-  stringOption,
-} from "./search-args.js";
 import { searchUsage } from "./search-usage.js";
 import { readExactDocument } from "../kernel/search/read-exact.js";
 import type { MorningSemanticBackend, MorningRetrieveOptions } from "../kernel/search/morning.js";
@@ -135,7 +129,7 @@ async function runPathRead(resolved: Target, deps: SearchCommandDeps): Promise<v
     fail("--path is mutually exclusive with search subcommands, query text, and mode flags");
   }
   const result = await deps.readExactDocument(resolved.vault, relPath);
-  printJson(console.log, result);
+  console.log(JSON.stringify(result, null, 2));
   if (!result.available) process.exitCode = 1;
 }
 
@@ -179,14 +173,14 @@ async function runSearch(argv: readonly string[], deps: SearchCommandDeps): Prom
     const { retrieveMorningContext } = await import("../kernel/search/morning.js");
     const result = await deps.runEngineSession(resolved.vault, { write: false }, (adapter) =>
       retrieveMorningContext(contextOptions(resolved.vault, resolved.argv.slice(1)), backend(adapter, resolved.vault)));
-    printJson(console.log, result);
+    console.log(JSON.stringify(result, null, 2));
     return;
   }
   if (flagged.includes("--context")) fail("--context must be the first search argument");
   const valueFlags = new Set([
     "collection", "limit", "index", "min-score", "chunk-strategy", "cursor",
     "collection-path", "mode", "folder", "field", "link", "intent", "lex",
-    "vec", "hyde", "candidate-limit", "max-queries",
+    "vec", "hyde", "candidate-limit", "max-queries", "observed",
   ]);
   const booleanFlags = new Set([
     "all", "full", "full-path", "expand", "rerank", "no-rerank",
@@ -201,6 +195,7 @@ async function runSearch(argv: readonly string[], deps: SearchCommandDeps): Prom
       if (value === undefined || value.startsWith("--")) fail(`${token} requires a value`);
     }
   }
+  const { parseSearchArgs, searchQueryOptions, stringOption } = await import("./search-args.js");
   // The query parser treats its first positional as the verb, so the implicit verb is supplied here.
   const args = parseSearchArgs(["query", ...flagged]);
   const query = [...args.positional.slice(1), ...literal].join(" ")
@@ -208,14 +203,18 @@ async function runSearch(argv: readonly string[], deps: SearchCommandDeps): Prom
     || stringOption(args, "vec")
     || stringOption(args, "hyde")
     || "";
-  if (!query) fail("search requires query text or --lex, --vec, or --hyde");
+  if (!query && stringOption(args, "observed") === undefined) fail("search requires query text or --lex, --vec, --hyde, or --observed");
   const requestedMode = stringOption(args, "mode") ?? "query";
   if (requestedMode !== "query" && requestedMode !== "search" && requestedMode !== "vsearch") {
     fail("--mode must be query, search, or vsearch");
   }
-  const result = await deps.runEngineSession(resolved.vault, { write: false }, (adapter) =>
-    adapter.semanticQuery(searchQueryOptions(requestedMode as SemanticSearchMode, resolved.vault, args, query)));
-  printJson(console.log, result);
+  const { requiresEmbeddings } = await import("../kernel/searchbackend/engine-search-backend.js");
+  const queryOptions = searchQueryOptions(requestedMode as SemanticSearchMode, resolved.vault, args, query);
+  const result = await deps.runEngineSession(resolved.vault, {
+    write: false,
+    ...(requiresEmbeddings(queryOptions) ? {} : { liveLexical: true as const }),
+  }, (adapter) => adapter.semanticQuery(queryOptions));
+  console.log(JSON.stringify(result, null, 2));
   if (!result.available) process.exitCode = 1;
 }
 
@@ -238,6 +237,7 @@ export async function runIndexFamilyCommand(argv: readonly string[]): Promise<vo
   process.exitCode = 0;
   try {
     const { runIndexCommand, validateIndexFamilyArgs } = await import("./index-command.js");
+    const { parseSearchArgs } = await import("./search-args.js");
     validateIndexFamilyArgs(argv);
     const resolved = await target(argv);
     await runIndexCommand({
