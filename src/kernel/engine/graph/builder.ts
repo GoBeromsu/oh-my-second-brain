@@ -1,23 +1,28 @@
+import type { BigIntStats } from "node:fs";
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { mapWithConcurrency } from "../../conventions/vault-walk.js";
+import { fileMetadataWitness, readFileSnapshot } from "../../conventions/file-snapshot.js";
 import { parseNote } from "../../conventions/frontmatter.js";
 import { managedSourceExclusionMatcher } from "../../conventions/note-exclude.js";
 import type { Digest } from "../../conventions/canonical.js";
 import { classifyNoteTemplateIdentity, deriveTemplateRetrievalAxes, type TemplateRetrievalAxes } from "../retrieval/axes.js";
-import type { SearchTemplateSource } from "../retrieval/template-source.js";
+import { readSearchTemplateSource, type SearchTemplateSource } from "../retrieval/template-source.js";
 import type { GraphEdge } from "../types.js";
 import type { AxisScalar, EngineGraphNode, NodeTemplateBinding } from "./node.js";
 import { toAxisScalars, tokenize } from "./node.js";
 import { buildWikilinkIndexWithFrontmatter, resolveWikilink } from "./resolver.js";
 
 const CACHE_VERSION = 3;
-const NODE_CACHE_VERSION = 4;
+const NODE_CACHE_VERSION = 5;
 export const TYPE_AFFINITY_MAX_GROUP = 64;
 
 interface ParsedDoc {
   readonly docPath: string;
   readonly raw: string;
+  readonly bytes: Buffer;
+  readonly metadataWitness: string | null;
   readonly frontmatter: Record<string, unknown>;
   readonly body: string;
   readonly diagnostics: readonly string[];
@@ -69,7 +74,7 @@ function ensureInside(root: string, candidate: string, label: string): void {
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`${label} escapes the configured vault root.`);
 }
 
-async function markdownPaths(vault: string, isExcluded: (notePath: string) => Promise<boolean>): Promise<string[]> {
+async function markdownPaths(vault: string, isExcluded: (notePath: string) => Promise<boolean>, metadata?: Map<string, BigIntStats>): Promise<string[]> {
   const root = await realpath(vault);
   const paths: string[] = [];
   const visited = new Set<string>();
@@ -83,11 +88,11 @@ async function markdownPaths(vault: string, isExcluded: (notePath: string) => Pr
       const absolute = path.join(directory, entry.name);
       const target = await realpath(absolute);
       ensureInside(root, target, `Vault entry "${absolute}"`);
-      const entryStat = await stat(absolute);
+      const entryStat = await stat(absolute, { bigint: true });
       if (entryStat.isDirectory()) await walk(absolute);
       else if (entryStat.isFile() && entry.name.toLocaleLowerCase().endsWith(".md")) {
         const relative = path.relative(vault, absolute).replaceAll("\\", "/");
-        if (!(await isExcluded(relative))) paths.push(relative);
+        if (!(await isExcluded(relative))) { paths.push(relative); metadata?.set(relative, entryStat); }
       }
     }
   }
@@ -111,9 +116,9 @@ async function explicitPaths(vault: string, files: readonly string[], isExcluded
   return [...new Set(output)].sort((left, right) => left.localeCompare(right));
 }
 
-async function graphPaths(vault: string, files: readonly string[] | undefined, meta: SearchTemplateSource): Promise<string[]> {
+async function graphPaths(vault: string, files: readonly string[] | undefined, meta: SearchTemplateSource, metadata?: Map<string, BigIntStats>): Promise<string[]> {
   const isExcluded = await managedSourceExclusionMatcher(vault, meta.source.sourcePaths ?? []);
-  return files === undefined ? markdownPaths(vault, isExcluded) : explicitPaths(vault, files, isExcluded);
+  return files === undefined ? markdownPaths(vault, isExcluded, metadata) : explicitPaths(vault, files, isExcluded);
 }
 
 function parseDocument(raw: string): { readonly frontmatter: Record<string, unknown>; readonly body: string; readonly diagnostics: readonly string[] } {
@@ -163,11 +168,24 @@ function wikilinkIndex(docs: readonly { readonly docPath: string; readonly front
   }));
 }
 
-async function parseDocs(vault: string, paths: readonly string[]): Promise<ParsedDoc[]> {
-  return Promise.all(paths.map(async docPath => {
-    const raw = await readFile(path.join(vault, docPath), "utf8");
-    return { docPath, raw, ...parseDocument(raw) };
-  }));
+async function parseDocs(vault: string, paths: readonly string[], expected?: ReadonlyMap<string, BigIntStats>): Promise<ParsedDoc[]> {
+  let failed = false;
+  let firstError: unknown;
+  const docs = await mapWithConcurrency(paths, 32, async docPath => {
+    if (failed) return null;
+    try {
+      const { bytes, witness: metadataWitness } = await readFileSnapshot(path.join(vault, docPath), expected?.get(docPath));
+      const raw = bytes.toString("utf8");
+      return { docPath, raw, bytes, metadataWitness, ...parseDocument(raw) };
+    } catch (error) {
+      // Stop admitting reads, but let every admitted handle close before the
+      // original failure reaches a caller that may immediately retry the build.
+      if (!failed) { failed = true; firstError = error; }
+      return null;
+    }
+  });
+  if (failed) throw firstError;
+  return docs.filter((doc): doc is ParsedDoc => doc !== null);
 }
 
 /** Shared identity classification. Required and allowed-value checks stay out of search. */
@@ -181,10 +199,10 @@ function classifyIdentity(doc: ParsedDoc, meta: SearchTemplateSource, templateId
   return { template: identity.templateId, binding: "template", diagnostics: [] };
 }
 
-async function loadBoundDocs(vault: string, meta: SearchTemplateSource, files: readonly string[] | undefined): Promise<{ readonly retrieval: TemplateRetrievalAxes | null; readonly docs: readonly BoundDoc[] }> {
+async function loadBoundDocs(vault: string, meta: SearchTemplateSource, files: readonly string[] | undefined, captured?: { readonly paths: readonly string[]; readonly metadata: ReadonlyMap<string, BigIntStats> }): Promise<{ readonly retrieval: TemplateRetrievalAxes | null; readonly docs: readonly BoundDoc[] }> {
   const retrieval = requireSource(meta);
   const templateIds = new Set(retrieval?.templates.map(item => item.templateId) ?? []);
-  const docs = (await parseDocs(vault, await graphPaths(vault, files, meta))).map(doc => ({ ...doc, ...classifyIdentity(doc, meta, templateIds) }));
+  const docs = (await parseDocs(vault, captured?.paths ?? await graphPaths(vault, files, meta), captured?.metadata)).map(doc => ({ ...doc, ...classifyIdentity(doc, meta, templateIds) }));
   return { retrieval, docs };
 }
 
@@ -238,6 +256,10 @@ function templateGroups(docs: readonly BoundDoc[]): Map<string, string[]> {
 export async function buildGraphWithWarnings(opts: { readonly vaultPath: string; readonly meta: SearchTemplateSource; readonly files?: readonly string[] }): Promise<{ readonly edges: GraphEdge[]; readonly warnings: readonly string[] }> {
   const vault = path.resolve(opts.vaultPath);
   const { docs } = await loadBoundDocs(vault, opts.meta, opts.files);
+  return graphFromDocs(docs);
+}
+
+function graphFromDocs(docs: readonly BoundDoc[]): { readonly edges: GraphEdge[]; readonly warnings: readonly string[] } {
   if (docs.length === 0) return { edges: [], warnings: [] };
   const index = wikilinkIndex(docs);
   const edges: GraphEdge[] = [];
@@ -308,6 +330,10 @@ export async function buildGraph(opts: { readonly vaultPath: string; readonly me
 export async function buildNodeIndex(opts: { readonly vaultPath: string; readonly meta: SearchTemplateSource; readonly files?: readonly string[] }): Promise<EngineGraphNode[]> {
   const vault = path.resolve(opts.vaultPath);
   const { retrieval, docs } = await loadBoundDocs(vault, opts.meta, opts.files);
+  return nodesFromDocs(retrieval, docs);
+}
+
+function nodesFromDocs(retrieval: TemplateRetrievalAxes | null, docs: readonly BoundDoc[]): EngineGraphNode[] {
   const index = wikilinkIndex(docs);
   return docs.map(doc => {
     const axes: Record<string, readonly AxisScalar[]> = {};
@@ -335,9 +361,7 @@ export async function buildNodeIndex(opts: { readonly vaultPath: string; readonl
   }).sort((left, right) => left.path.localeCompare(right.path));
 }
 
-/** Hash the metadata digest, registered source exclusions, and current note bytes. */
-export async function nodeSourceSignature(vaultPath: string, meta: SearchTemplateSource): Promise<Digest> {
-  const vault = path.resolve(vaultPath);
+function nodeSourceHash(meta: SearchTemplateSource) {
   requireSource(meta);
   const hash = createHash("sha256");
   hash.update(meta.digest);
@@ -346,13 +370,67 @@ export async function nodeSourceSignature(vaultPath: string, meta: SearchTemplat
     hash.update(excluded);
     hash.update("\0");
   }
+  return hash;
+}
+
+/** Hash the metadata digest, registered source exclusions, and current note bytes. */
+export async function nodeSourceSignature(vaultPath: string, meta: SearchTemplateSource): Promise<Digest> {
+  const vault = path.resolve(vaultPath);
+  const hash = nodeSourceHash(meta);
   for (const file of await graphPaths(vault, undefined, meta)) {
     hash.update(file);
     hash.update("\0");
-    hash.update(await readFile(path.join(vault, file)));
+    hash.update((await readFileSnapshot(path.join(vault, file))).bytes);
     hash.update("\0");
   }
   return `sha256:${hash.digest("hex")}` as Digest;
+}
+
+/** Filesystem change witness, not a replacement for the authoritative byte hash. */
+async function nodeMetadataSnapshot(vaultPath: string, meta: SearchTemplateSource): Promise<{ readonly signature: Digest | null; readonly paths: readonly string[]; readonly metadata: ReadonlyMap<string, BigIntStats> }> {
+  requireSource(meta);
+  const metadata = new Map<string, BigIntStats>();
+  const paths = await graphPaths(path.resolve(vaultPath), undefined, meta, metadata);
+  const hash = createHash("sha256");
+  hash.update(JSON.stringify(["oms.node-metadata.v1", meta.digest, meta.exclusions.digest,
+    [...new Set(meta.source.sourcePaths ?? [])].sort((left, right) => left.localeCompare(right))]));
+  let trusted = true;
+  for (const file of paths) {
+    const witness = fileMetadataWitness(metadata.get(file));
+    if (witness === null) trusted = false;
+    hash.update(JSON.stringify([file, witness]));
+  }
+  return { signature: trusted ? `sha256:${hash.digest("hex")}` : null, paths, metadata };
+}
+
+/** Build and verify all cache inputs before either cache is published by an explicit repair. */
+export async function buildGraphSnapshot(vaultPath: string, meta?: SearchTemplateSource): Promise<{
+  readonly meta: SearchTemplateSource;
+  readonly nodes: EngineGraphNode[];
+  readonly edges: GraphEdge[];
+  readonly warnings: readonly string[];
+  readonly sourceSignature: Digest;
+  readonly metadataSignature: Digest | null;
+}> {
+  const beforeMeta = meta ?? await readSearchTemplateSource(vaultPath);
+  const before = await nodeMetadataSnapshot(vaultPath, beforeMeta);
+  // One captured membership and byte set feeds every artifact. Independent scans
+  // could disagree if an exclusion changed and reverted between those scans.
+  const { retrieval, docs } = await loadBoundDocs(path.resolve(vaultPath), beforeMeta, undefined, before);
+  const built = graphFromDocs(docs);
+  const nodes = nodesFromDocs(retrieval, docs);
+  const hash = nodeSourceHash(beforeMeta);
+  for (const doc of docs) { hash.update(doc.docPath); hash.update("\0"); hash.update(doc.bytes); hash.update("\0"); }
+  const sourceSignature = `sha256:${hash.digest("hex")}` as Digest;
+  const afterMeta = await readSearchTemplateSource(vaultPath);
+  const after = await nodeMetadataSnapshot(vaultPath, afterMeta);
+  if (beforeMeta.digest !== afterMeta.digest || JSON.stringify(before.paths) !== JSON.stringify(after.paths)
+    || (before.signature !== null && before.signature !== after.signature)) fail("vault changed during graph build; retry the explicit build");
+  const trustedReads = docs.every(doc => doc.metadataWitness !== null);
+  if (before.signature === null || after.signature === null || !trustedReads) {
+    if (sourceSignature !== await nodeSourceSignature(vaultPath, afterMeta)) fail("vault changed during graph build; retry the explicit build");
+  }
+  return { ...built, nodes, meta: beforeMeta, sourceSignature, metadataSignature: before.signature !== null && after.signature !== null && trustedReads ? before.signature : null };
 }
 
 async function readCache(cachePath: string): Promise<string | null> {
@@ -429,7 +507,7 @@ export async function loadCachedGraphMeta(cachePath: string, projectionSignature
   return { edges: parsed.edges, generatedAt: parsed.generatedAt };
 }
 
-export async function saveNodeIndex(cachePath: string, nodes: readonly EngineGraphNode[], sourceSignature: Digest, projectionSignature: Digest): Promise<void> {
+export async function saveNodeIndex(cachePath: string, nodes: readonly EngineGraphNode[], sourceSignature: Digest, projectionSignature: Digest, metadataSignature: Digest | null = null): Promise<void> {
   const serialized: SerializedNode[] = nodes.map(node => ({
     path: node.path,
     template: node.template,
@@ -441,22 +519,29 @@ export async function saveNodeIndex(cachePath: string, nodes: readonly EngineGra
     bodyPreview: node.bodyPreview,
     searchTerms: [...node.searchTerms].sort((left, right) => left.localeCompare(right)),
   }));
-  await atomicWrite(cachePath, `${JSON.stringify({ version: NODE_CACHE_VERSION, generatedAt: new Date().toISOString(), sourceSignature, projectionSignature, nodes: serialized })}\n`);
+  await atomicWrite(cachePath, `${JSON.stringify({ version: NODE_CACHE_VERSION, generatedAt: new Date().toISOString(), sourceSignature, projectionSignature, metadataSignature, nodes: serialized })}\n`);
 }
 
-export async function loadNodeIndex(cachePath: string, sourceSignature: Digest, projectionSignature: Digest): Promise<EngineGraphNode[] | null> {
+interface NodeCache {
+  readonly sourceSignature: string;
+  readonly projectionSignature: string;
+  readonly metadataSignature: string | null;
+  readonly nodes: SerializedNode[];
+}
+
+async function readNodeCache(cachePath: string): Promise<NodeCache | null> {
   const raw = await readCache(cachePath);
   if (raw === null) return null;
   const parsed = parseCache(raw, cachePath);
   if (parsed.version !== NODE_CACHE_VERSION) return null;
   if (typeof parsed.sourceSignature !== "string" || typeof parsed.projectionSignature !== "string") fail(`node cache "${cachePath}" is stale; rebuild explicitly`);
-  if (parsed.sourceSignature !== sourceSignature || parsed.projectionSignature !== projectionSignature) fail(`node cache "${cachePath}" signature is stale; rebuild explicitly`);
-  if (!Array.isArray(parsed.nodes)) throw new Error(`Node cache "${cachePath}" has an invalid format.`);
-  const nodes: SerializedNode[] = [];
-  for (const node of parsed.nodes) {
-    if (!validNode(node)) throw new Error(`Node cache "${cachePath}" has an invalid format.`);
-    nodes.push(node);
-  }
+  if ((parsed.metadataSignature !== null && (typeof parsed.metadataSignature !== "string" || !/^sha256:[a-f0-9]{64}$/.test(parsed.metadataSignature)))
+    || !Array.isArray(parsed.nodes) || !parsed.nodes.every(validNode)) throw new Error(`Node cache "${cachePath}" has an invalid format.`);
+  return { sourceSignature: parsed.sourceSignature, projectionSignature: parsed.projectionSignature,
+    metadataSignature: parsed.metadataSignature, nodes: parsed.nodes };
+}
+
+function restoreNodes(nodes: readonly SerializedNode[]): EngineGraphNode[] {
   return nodes.map(node => ({
     path: node.path,
     template: node.template,
@@ -468,4 +553,23 @@ export async function loadNodeIndex(cachePath: string, sourceSignature: Digest, 
     bodyPreview: node.bodyPreview,
     searchTerms: new Set(node.searchTerms),
   }));
+}
+
+/** Explicit byte-signature validation remains available for callers without a build witness. */
+export async function loadNodeIndex(cachePath: string, sourceSignature: Digest, projectionSignature: Digest): Promise<EngineGraphNode[] | null> {
+  const cached = await readNodeCache(cachePath);
+  if (cached === null) return null;
+  if (cached.sourceSignature !== sourceSignature || cached.projectionSignature !== projectionSignature) fail(`node cache "${cachePath}" signature is stale; rebuild explicitly`);
+  return restoreNodes(cached.nodes);
+}
+
+/** Read-only warm path: miss before walking; changed metadata falls back to exact note bytes. */
+export async function loadNodeIndexForVault(cachePath: string, vaultPath: string, meta: SearchTemplateSource): Promise<EngineGraphNode[] | null> {
+  const cached = await readNodeCache(cachePath);
+  if (cached === null) return null;
+  if (cached.projectionSignature !== meta.digest) fail(`node cache "${cachePath}" projection signature is stale; rebuild explicitly`);
+  if (cached.metadataSignature === null || cached.metadataSignature !== (await nodeMetadataSnapshot(vaultPath, meta)).signature) {
+    if (cached.sourceSignature !== await nodeSourceSignature(vaultPath, meta)) fail(`node cache "${cachePath}" signature is stale; rebuild explicitly`);
+  }
+  return restoreNodes(cached.nodes);
 }

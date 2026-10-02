@@ -4,6 +4,10 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Graph and node-index construction bound concurrent note reads to 32 handles, preventing file-descriptor exhaustion on large vaults without changing the resulting projection or source signature. A failed read stops new work and drains open handles before its original error is returned.
+
+- Warm node-cache reads validate a version-5 filesystem metadata witness instead of rereading every note body. Byte-identical touches still reuse the cache through the existing content hash; real edits and projection changes remain loud. Explicit graph builds derive edges, nodes, and the content hash from the same handle-verified captured bytes and verify note membership and metadata before publishing either cache, while read-only searches leave cache state untouched. Filesystems without trustworthy high-resolution identity evidence retain full-byte validation.
+
 ## [0.20.6] - 2026-10-01
 
 ## [0.20.5] - 2026-09-30
