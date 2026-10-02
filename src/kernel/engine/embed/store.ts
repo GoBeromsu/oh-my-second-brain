@@ -20,6 +20,7 @@ import {
 import { createEngineStoreReadSnapshot } from "./read-snapshot.js";
 import { createDocumentSourceAccess, DOCUMENT_SOURCE_SCHEMA, type DocumentSource } from "./source.js";
 import { createDocumentRevisionAccess, ensureDocumentRevisionSchema, type DocumentRevisionAccess } from "./revision.js";
+import type { CapturedLexicalDocument } from "./lexical-batch.js";
 
 export { ENGINE_EMBED_META_VERSION } from "./identity.js";
 
@@ -425,7 +426,7 @@ export function openEngineStoreCore(dbPath: string, options: { readonly fileMust
 }
 
 /** Bind already initialized core tables; ownership of the connection transfers. */
-function bindCoreStore(db: Database.Database, strictLexical = false): EngineStore {
+function bindCoreStore(db: Database.Database, strictLexical = false, reuseOuterTransaction: () => boolean = () => false): EngineStore {
   // Optional: load sqlite-vec so lex-only sync can delete stale vectors for
   // modified chunks (prevents silent cross-model reuse on later vec queries).
   let stmtDeleteVec: ReturnType<Database.Database["prepare"]> | null = null;
@@ -442,7 +443,7 @@ function bindCoreStore(db: Database.Database, strictLexical = false): EngineStor
     // sqlite-vec unavailable or vec table absent — core-only mode still works.
   }
 
-  const sources = createDocumentSourceAccess(db);
+  const sources = createDocumentSourceAccess(db, false, reuseOuterTransaction);
   const documentRevisions = createDocumentRevisionAccess(db);
 
   // Prepared statements — core only
@@ -516,7 +517,7 @@ function bindCoreStore(db: Database.Database, strictLexical = false): EngineStor
     "UPDATE engine_meta SET embedding_provider = ?, embedding_model = ?, embedding_revision = ?, embedding_sha256 = ?, embedding_dimensions = ?, embedding_context_length = ?, embedding_mrl_dim = ?, embedding_normalization = ?, embedding_prefix_scheme = ?, embedding_fingerprint = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = 1",
   );
 
-  const doUpsertLex = db.transaction((rows: ReadonlyArray<Chunk>) => {
+  const upsertLexBody = (rows: ReadonlyArray<Chunk>) => {
     for (const row of rows) {
       sources.invalidate(row.docPath);
       documentRevisions.invalidate(row.docPath);
@@ -533,15 +534,17 @@ function bindCoreStore(db: Database.Database, strictLexical = false): EngineStor
         stmtInsertFts.run(id, row.docPath, row.ordinal, row.text);
       }
     }
-  });
+  };
+  const doUpsertLex = db.transaction(upsertLexBody);
 
-  const doClearDocument = db.transaction((docPath: string) => {
+  const clearDocumentBody = (docPath: string) => {
     sources.invalidate(docPath);
     documentRevisions.invalidate(docPath);
     stmtClearDocVec?.run(docPath);
     stmtClearDocFts.run(docPath);
     stmtClearDocMeta.run(docPath);
-  });
+  };
+  const doClearDocument = db.transaction(clearDocumentBody);
 
   return {
     documentRevisions,
@@ -556,7 +559,8 @@ function bindCoreStore(db: Database.Database, strictLexical = false): EngineStor
     },
 
     upsertLex(rows: ReadonlyArray<Chunk>): void {
-      doUpsertLex(rows);
+      if (reuseOuterTransaction() && db.inTransaction) upsertLexBody(rows);
+      else doUpsertLex(rows);
     },
 
     // VectorStore
@@ -639,7 +643,8 @@ function bindCoreStore(db: Database.Database, strictLexical = false): EngineStor
     },
 
     clearDocument(docPath: string): void {
-      doClearDocument(docPath);
+      if (reuseOuterTransaction() && db.inTransaction) clearDocumentBody(docPath);
+      else doClearDocument(docPath);
     },
 
     listDocPaths(): string[] {
@@ -1237,6 +1242,8 @@ export interface DetachedLexicalStore {
   readonly store: EngineStore;
   /** One synchronous private transaction; callers capture source bytes first. */
   reconcileDocument(docPath: string, source: DocumentSource, chunks: readonly Chunk[]): void;
+  /** One synchronous transaction for an already bounded, captured disk batch. */
+  reconcileDocuments(documents: readonly CapturedLexicalDocument[]): void;
   allocatedBytes(): number;
   /** Copy this detached core to another detached database; never the source. */
   copyTo(dbPath: string): DetachedLexicalStore;
@@ -1244,24 +1251,41 @@ export interface DetachedLexicalStore {
 }
 
 function detachedHandle(db: Database.Database): DetachedLexicalStore {
-  const store = bindCoreStore(db, true);
-  const reconcileDocument = db.transaction((docPath: string, source: DocumentSource, chunks: readonly Chunk[]) => {
-    const expected = store.getShas(docPath);
-    if (expected.size !== chunks.length) {
-      store.clearDocument(docPath);
-      store.upsertLex(chunks);
-    } else {
-      const changed = chunks.filter(chunk => expected.get(chunk.ordinal) !== chunk.sha);
-      if (changed.length > 0) store.upsertLex(changed);
+  // This handle owns its outer transactions and propagates every write failure.
+  // FTS5 flushes pending terms on SAVEPOINT; redundant nested savepoints would
+  // defeat batching. Persistent/default bindings retain their independent guards.
+  let reconciling = false;
+  const store = bindCoreStore(db, true, () => reconciling);
+  const allocatedBytes = () => Number(db.pragma("page_count", { simple: true })) * Number(db.pragma("page_size", { simple: true }));
+  const reconcileBody = (docPath: string, source: DocumentSource, chunks: readonly Chunk[]) => {
+    const previous = reconciling;
+    reconciling = true;
+    try {
+      const expected = store.getShas(docPath);
+      if (expected.size !== chunks.length) {
+        store.clearDocument(docPath);
+        store.upsertLex(chunks);
+      } else {
+        const changed = chunks.filter(chunk => expected.get(chunk.ordinal) !== chunk.sha);
+        if (changed.length > 0) store.upsertLex(changed);
+      }
+      // Chunk changes and their verified source evidence share one outer commit.
+      // Only this dedicated wrapper owns rollback; arbitrary active transactions
+      // (including caught failures inside revision callbacks) retain savepoints.
+      store.recordDocumentSource(docPath, source, chunks);
+    } finally {
+      reconciling = previous;
     }
-    // Chunk changes and their verified source evidence share one outer commit.
-    // Existing store transactions become savepoints; source reads stay outside.
-    store.recordDocumentSource(docPath, source, chunks);
+  };
+  const reconcileDocument = db.transaction(reconcileBody);
+  const reconcileDocuments = db.transaction((documents: readonly CapturedLexicalDocument[]) => {
+    for (const document of documents) reconcileBody(document.docPath, document.source, document.chunks);
   });
   return {
     store,
     reconcileDocument,
-    allocatedBytes: () => Number(db.pragma("page_count", { simple: true })) * Number(db.pragma("page_size", { simple: true })),
+    reconcileDocuments,
+    allocatedBytes,
     copyTo(dbPath): DetachedLexicalStore {
       db.prepare("VACUUM INTO ?").run(dbPath);
       const copied = openDatabase(dbPath, { fileMustExist: true });
