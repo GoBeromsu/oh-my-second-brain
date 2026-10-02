@@ -21,6 +21,7 @@
  */
 
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { storeRoot } from "../../contract/store.js";
@@ -44,6 +45,7 @@ import {
 import { openEngineStore } from "../embed/store.js";
 import { assertExternalDatabasePath, engineGraphCachePath, engineNodeCachePath, engineStorePath } from "../paths.js";
 import type { EngineStore } from "../embed/store.js";
+import { indexSourcesUnchanged, type IndexSourceVerification, type IndexSourceSnapshot } from "../embed/freshness.js";
 import type { EmbeddingModelDescriptor } from "../embed/model.js";
 import { capabilityGuidance } from "../embed/config.js";
 import {
@@ -278,16 +280,22 @@ function docHeadSnippet(content: string, maxChars = 200): string {
  * document-level paths only, so the snippet is the note's opening body (not a
  * passage match) — practical parity with the src/search hit preview without
  * faking relevance. Out-of-vault paths or read failures degrade to the bare hit
- * (empty snippet, no title), never throwing.
+ * (empty snippet, no title). When source digests are supplied, an unverified
+ * preview fails the query instead of mixing indexed matches with other bytes.
  */
-function enrichQueryHits(result: McpSemanticQueryResult, vault: string): McpSemanticQueryResult {
+function enrichQueryHits(result: McpSemanticQueryResult, vault: string, sourceHashes?: ReadonlyMap<string, string>): McpSemanticQueryResult {
   if (!result.available || result.hits.length === 0) return result;
   const hits = result.hits.map((hit): McpSemanticSearchHit => {
     if (isUnsafeVaultPath(hit.path, vault)) return hit;
     let raw: string;
     try {
-      raw = readFileSync(path.join(vault, hit.path), "utf-8");
-    } catch {
+      const bytes = readFileSync(path.join(vault, hit.path));
+      if (sourceHashes !== undefined && createHash("sha256").update(bytes).digest("hex") !== sourceHashes.get(hit.path)) {
+        throw new Error("INDEX_SOURCE_DRIFT: a result preview changed after index verification.");
+      }
+      raw = bytes.toString("utf8");
+    } catch (error) {
+      if (sourceHashes !== undefined) throw error;
       return hit;
     }
     const title = extractDocTitle(raw);
@@ -476,6 +484,8 @@ export class McpEngineAdapter {
       readonly modelCapabilityStatus?: () => Readonly<Record<ModelCapability, McpSemanticModelCapabilityStatus>>;
       readonly dbPath?: string;
       readonly onStoreRebind?: (store: EngineStore) => void;
+      /** Required by production persisted read-only assemblies; injected stores own their source policy. */
+      readonly verifyIndexSources?: (vault: string, collection?: string) => Promise<IndexSourceVerification>;
     },
     private readonly reranker?: Reranker,
     /** Explicit assembly policy; read-only engines suppress this refresh. */
@@ -720,6 +730,8 @@ export class McpEngineAdapter {
     }
     let rerankRequested = false;
     const facetWarnings: string[] = [];
+    let sourceSnapshot: IndexSourceSnapshot | undefined;
+    let sourceRevalidationStarted = false;
     try {
       // A core engine has a real lexical store but deliberately no embedding
       // provider. The default query mode is hybrid for vector-capable engines;
@@ -744,6 +756,14 @@ export class McpEngineAdapter {
         if (!syncResult.available) {
           return queryResultUnavailable(syncResult.reason ?? "Lexical index sync unavailable");
         }
+      }
+      if (this.config?.verifyIndexSources !== undefined) {
+        const verification = await this.config.verifyIndexSources(opts.vault ?? this.vaultPath, opts.collectionPath);
+        if (!verification.available) return queryResultUnavailable(
+          `${verification.reason} Run oms doctor sync-embeddings --mode ${isLexOnlySubQueries(effectiveSubQueries) ? "sync" : "embed"} for the selected vault.`,
+          { indexDrift: true, requestedStrategy, generatedSearches, warnings: ["No results were returned from an unverified source snapshot."] },
+        );
+        sourceSnapshot = verification.snapshot;
       }
       // Without an explicit candidate limit, retrieve the complete ranked
       // stream so totalCount and offset cursors remain accurate on pages past
@@ -819,11 +839,19 @@ export class McpEngineAdapter {
       });
       // Fill title + doc-head snippet from disk so engine hits reach practical
       // parity with the src/search preview (the pure mapper stays text-free).
-      return enrichQueryHits(mapped, opts.vault ?? this.vaultPath);
+      sourceRevalidationStarted = sourceSnapshot !== undefined;
+      const enriched = enrichQueryHits(mapped, opts.vault ?? this.vaultPath, sourceSnapshot?.contentSha256);
+      if (sourceSnapshot !== undefined && !(await indexSourcesUnchanged(sourceSnapshot))) {
+        return queryResultUnavailable("INDEX_SOURCE_DRIFT: notes changed while searching. Retry after edits settle, or run oms doctor sync-embeddings --mode sync for the selected vault.", {
+          indexDrift: true, requestedStrategy, generatedSearches,
+        });
+      }
+      return enriched;
     } catch (err) {
       return queryResultUnavailable(err instanceof Error ? err.message : String(err), {
         requestedStrategy,
         generatedSearches,
+        indexDrift: sourceRevalidationStarted,
         // A failed response cannot claim the reranker was successfully applied,
         // but preserve its request in warnings for an auditable error receipt.
         rerankApplied: false,
