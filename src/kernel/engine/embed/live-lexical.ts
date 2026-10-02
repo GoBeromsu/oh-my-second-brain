@@ -13,6 +13,7 @@ import type { ScoredHit, VectorStore } from "../types.js";
 import { assertExternalDatabasePath, engineStorePath } from "../paths.js";
 import { hashReadSnapshotFile } from "./read-snapshot.js";
 import { fileMetadataWitness } from "../../conventions/file-snapshot.js";
+import { parseNote } from "../../conventions/frontmatter.js";
 import { makeDeferredStore } from "./deferred.js";
 import { scanIndexSources, type IndexSourceSnapshot } from "./freshness.js";
 import { chunkDocument } from "./chunker.js";
@@ -325,9 +326,10 @@ export class LiveLexicalSession {
           }
         }
         const current = await readDocumentSource(snapshot.vault, docPath);
-        const document = parseNodeProjectionDocument(docPath, current.content, false);
+        const parsed = parseNote(current.content);
+        const document = parseNodeProjectionDocument(docPath, current.content, false, parsed);
         this.rememberProjection(docPath, current.source.contentSha256, document);
-        const chunks = chunkDocument(docPath, current.content);
+        const chunks = chunkDocument(docPath, current.content, undefined, parsed);
         const store = this.current!.store;
         const expected = store.getShas(docPath);
         if (expected.size !== chunks.length) {

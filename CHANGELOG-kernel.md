@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Live lexical capture shares one canonical frontmatter parse between its compact metadata projection and chunk title extraction. Malformed metadata diagnostics, title fallback, raw embedding text and copied projection values keep their existing semantics; unchanged warm notes still skip parsing.
+
 - Chunking counts each line's script-aware token weight once and carries the exact weight through overlap, avoiding repeated scans of growing buffers on short-line notes. Canonical chunk text, title, heading paths, ordinals and digests remain unchanged; cold live search still captures the full corpus and performs its existing freshness checks.
 
 - Automatic maintenance ignores excluded editor housekeeping watch hints while retaining known exclusion settings and their directory replacements. Uppercase Markdown hints remain incremental, and unsafe or uncertain paths still request complete reconciliation.
