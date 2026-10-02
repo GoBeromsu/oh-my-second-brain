@@ -47,13 +47,12 @@ import type { EngineStore } from "../embed/store.js";
 import type { EmbeddingModelDescriptor } from "../embed/model.js";
 import { capabilityGuidance } from "../embed/config.js";
 import {
-  buildGraphWithWarnings,
+  buildGraphSnapshot,
   saveCachedGraph,
   loadCachedGraphMeta,
   buildNodeIndex,
   saveNodeIndex,
-  loadNodeIndex,
-  nodeSourceSignature,
+  loadNodeIndexForVault,
 } from "../graph/builder.js";
 import type { EngineGraphNode } from "../graph/node.js";
 import {
@@ -506,8 +505,7 @@ export class McpEngineAdapter {
 
   /** Load a projection-matched node index, scanning notes without writing on a cache miss. */
   private async loadOrBuildNodes(vault: string, meta: SearchTemplateSource): Promise<EngineGraphNode[]> {
-    const sourceSignature = await nodeSourceSignature(vault, meta);
-    const cached = await loadNodeIndex(this.nodeCachePath(vault), sourceSignature, meta.digest);
+    const cached = await loadNodeIndexForVault(this.nodeCachePath(vault), vault, meta);
     if (cached !== null) return cached;
     return buildNodeIndex({ vaultPath: vault, meta });
   }
@@ -1092,8 +1090,7 @@ export class McpEngineAdapter {
     if (args.dryRun) {
       const cached = await loadCachedGraphMeta(graphCachePath, meta.digest);
       if (cached !== null) {
-        const sourceSignature = await nodeSourceSignature(args.vaultPath, meta);
-        const nodes = await loadNodeIndex(this.nodeCachePath(args.vaultPath), sourceSignature, meta.digest);
+        const nodes = await loadNodeIndexForVault(this.nodeCachePath(args.vaultPath), args.vaultPath, meta);
         if (nodes !== null) return engineGraphBuildResultToMcp({ notes: nodes.length, edges: cached.edges.length, generatedAt: cached.generatedAt, warnings: metadataWarnings });
       }
       return engineGraphBuildResultToMcp({
@@ -1104,13 +1101,10 @@ export class McpEngineAdapter {
       });
     }
 
-    const built = await buildGraphWithWarnings({ vaultPath: args.vaultPath, meta });
-    const edges = built.edges;
+    const built = await buildGraphSnapshot(args.vaultPath, meta);
+    const { edges, nodes, sourceSignature, metadataSignature } = built;
     await saveCachedGraph(graphCachePath, edges, meta.digest);
-
-    const nodes = await buildNodeIndex({ vaultPath: args.vaultPath, meta });
-    const sourceSignature = await nodeSourceSignature(args.vaultPath, meta);
-    await saveNodeIndex(this.nodeCachePath(args.vaultPath), nodes, sourceSignature, meta.digest);
+    await saveNodeIndex(this.nodeCachePath(args.vaultPath), nodes, sourceSignature, meta.digest, metadataSignature);
 
     return engineGraphBuildResultToMcp({ notes: nodes.length, edges: edges.length, generatedAt: new Date().toISOString(), warnings: [...metadataWarnings, ...built.warnings] });
   }
@@ -1125,8 +1119,7 @@ export class McpEngineAdapter {
       const meta = await readSearchTemplateSource(vaultPath);
       const cached = await loadCachedGraphMeta(this.graphCachePath(vaultPath), meta.digest);
       if (cached === null) return engineGraphBuildToStatusResult(null);
-      const sourceSignature = await nodeSourceSignature(vaultPath, meta);
-      const nodes = await loadNodeIndex(this.nodeCachePath(vaultPath), sourceSignature, meta.digest);
+      const nodes = await loadNodeIndexForVault(this.nodeCachePath(vaultPath), vaultPath, meta);
       if (nodes === null) return engineGraphBuildToStatusResult(null);
       return engineGraphBuildToStatusResult({ notes: nodes.length, edges: cached.edges.length, generatedAt: cached.generatedAt });
     } catch {

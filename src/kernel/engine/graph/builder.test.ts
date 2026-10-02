@@ -406,7 +406,7 @@ describe("projection-bound cache", () => {
     const source = await nodeSourceSignature(vault, resolved);
     const nodes = await buildNodeIndex({ vaultPath: vault, meta: resolved });
     await saveNodeIndex(cache, nodes, source, signature);
-    expect(JSON.parse(await readFile(cache, "utf8")).version).toBe(4);
+    expect(JSON.parse(await readFile(cache, "utf8")).version).toBe(5);
     const loaded = await loadNodeIndex(cache, source, signature);
     expect(loaded).toHaveLength(3);
     const roundTrip = (entries: readonly EngineGraphNode[]) => entries.map(node => ({ ...node, searchTerms: [...node.searchTerms].sort() }));
@@ -430,10 +430,10 @@ describe("projection-bound cache", () => {
       ["diagnostics", { template: null, binding: "unresolved", diagnostics: "unknown" }],
     ] as const;
     for (const [label, overrides] of cases) {
-      await writeFile(cache, JSON.stringify({ version: 4, sourceSignature: source, projectionSignature: signature, nodes: [{ ...base, ...overrides }] }), "utf8");
+      await writeFile(cache, JSON.stringify({ version: 5, metadataSignature: null, sourceSignature: source, projectionSignature: signature, nodes: [{ ...base, ...overrides }] }), "utf8");
       await expect(loadNodeIndex(cache, source, signature), label).rejects.toThrow(/invalid format/);
     }
-    await writeFile(cache, JSON.stringify({ version: 4, sourceSignature: source, projectionSignature: signature, nodes: [{ ...base, template: null, binding: "default", diagnostics: [] }] }), "utf8");
+    await writeFile(cache, JSON.stringify({ version: 5, metadataSignature: null, sourceSignature: source, projectionSignature: signature, nodes: [{ ...base, template: null, binding: "default", diagnostics: [] }] }), "utf8");
     await expect(loadNodeIndex(cache, source, signature)).resolves.toMatchObject([{ template: null, binding: "default", diagnostics: [] }]);
   });
 
