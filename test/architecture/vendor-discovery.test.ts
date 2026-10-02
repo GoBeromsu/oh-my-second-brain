@@ -12,6 +12,7 @@ import {
   harnessSurfaceRegistry,
 } from "../../src/kernel/harness/surface-registry.js";
 import { absolute, pathExists, readJson } from "./repo-root.js";
+import { parseNpmPackManifest } from "../../scripts/npm-pack-manifest.mjs";
 
 /**
  * Packaged vendor discovery.
@@ -96,20 +97,13 @@ async function hermesHasInstallableSkills(root: string): Promise<boolean> {
   }
 }
 
-interface NpmPackReport {
-  readonly files: readonly { readonly path: string }[];
-}
-
 async function packedFiles(root: string): Promise<readonly string[]> {
   const { stdout } = await execFileAsync("npm", ["pack", "--dry-run", "--json"], {
     cwd: root,
     maxBuffer: 1024 * 1024,
   });
-  const report = JSON.parse(stdout) as readonly NpmPackReport[];
-  const files = report[0]?.files.map((file) => file.path).sort();
-  expect(files, "npm pack --dry-run must report packed files").toBeDefined();
-  expect(files).not.toEqual([]);
-  return files!;
+  const { name } = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as { name: string };
+  return parseNpmPackManifest(stdout, name).files.map((file: { path: string }) => file.path).sort();
 }
 
 describe("packaged vendor discovery", () => {

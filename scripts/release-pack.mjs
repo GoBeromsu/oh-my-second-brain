@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { parseNpmPackManifest } from "./npm-pack-manifest.mjs";
 
 function fail(message) {
   console.error(`[release:pack] ${message}`);
@@ -35,16 +36,11 @@ async function readHarnessRegistry() {
 
 const harnessSurfaceRegistry = await readHarnessRegistry();
 const stdout = run("npm", ["pack", "--dry-run", "--json"]);
-let packs;
+let pack;
 try {
-  packs = JSON.parse(stdout);
+  pack = parseNpmPackManifest(stdout, "oh-my-second-brain");
 } catch (error) {
-  fail(`could not parse npm pack JSON: ${error instanceof Error ? error.message : String(error)}`);
-}
-
-const pack = packs?.[0];
-if (!pack || !Array.isArray(pack.files)) {
-  fail("npm pack JSON did not include a files array");
+  fail(error instanceof Error ? error.message : String(error));
 }
 
 const files = pack.files;

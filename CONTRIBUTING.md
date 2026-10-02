@@ -45,4 +45,6 @@ Keep implementation and contributor-facing documentation in the same change. The
 
 ### Documentation decay detection
 
+Packaging checks accept the single-package JSON array used by npm 10/11 and the package-name-keyed record introduced in [npm 12](https://github.com/npm/cli/releases/tag/v12.0.0). All consumers use `scripts/npm-pack-manifest.mjs` to verify the expected package name, tarball filename, and non-empty file manifest; errors, multiple packages, and malformed reports fail closed.
+
 Run `npm run check:docs` to validate local Markdown links and conservative source-path references. When changing a surface, also use the mapping above: compare CLI help to its docs, confirm skill/tool/command registry parity, run backend conformance tests for backend changes, and keep generated host assets and manifests aligned. The checker catches broken references; it cannot infer changed behavior, so reviewers must apply the mapping table.
