@@ -31,8 +31,11 @@ const DEFAULT_OVERLAP_RATIO = 0.15;
  */
 function tokenWeight(text: string): number {
   let weighted = 0;
-  for (const ch of text) {
-    weighted += isCjk(ch.codePointAt(0)!) ? 4 : 1;
+  for (let index = 0; index < text.length; index++) {
+    const codePoint = text.codePointAt(index)!;
+    weighted += isCjk(codePoint) ? 4 : 1;
+    // A supplementary character contributes once, just like string iteration.
+    if (codePoint > 0xffff) index++;
   }
   // Integer quarter-token units preserve the old ceil(weighted / 4) budget.
   return weighted;

@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Chunk token accounting reads numeric Unicode codepoints by UTF-16 index instead of iterating per-codepoint character strings. Supplementary characters, lone surrogates and all CJK weights retain identical chunk boundaries and digests. The bounded synthetic cold-search improvement and its limits are recorded in `docs/measurements/indexed-token-iteration-2026-10-03.md`.
+
 - Temporary lexical spills and read-only snapshots retain the canonical directory's device/inode identity and recheck ownership before reuse, copying, and cleanup. Missing, replaced, symlinked, or unverifiable directories are left untouched with a bounded residue diagnostic; cleanup failures preserve the original operation error. These observations detect replacement but do not provide an atomic boundary against ongoing same-user tampering.
 
 - Observed-only frontmatter filters and discovery capture current metadata without seeding detached lexical storage or chunking Markdown. Warm requests reuse the existing parsed projection cache and private EAV backing. A later lexical or mixed query reconciles the complete canonical chunk corpus, while concurrent upgrades wait for joined metadata selectors to finish; source witnesses, cursor validation, memory budgets and read-only persistence behavior are preserved.
