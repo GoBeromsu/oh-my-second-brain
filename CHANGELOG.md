@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-03
+
 - Release rehearsals use a read-only verification job with no OIDC grant and never invoke npm publish, including dry runs. Manual dispatch on a tag or with `rehearsal=false` cannot publish or create a GitHub Release; publication requires a verified `oms-v*` tag push in a separate privileged job. The npm trusted-publisher transfer hold still applies.
 
 - Release instructions use the canonical `oms setup host` and `oms setup package` commands and describe the six skills and four MCP tools verified by the artifact rehearsal, so operators can follow the documented upgrade steps with the current package.

@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-03
+
 - Enabled HTTP maintenance cancels immediately when shutdown is requested, even when a client leaves a request body unfinished. Connections have a bounded drain period and repeated close calls reuse one shutdown.
 
 - `oms serve mcp|http --maintenance lexical|full` explicitly enables automatic maintenance of an existing canonical index. Default startup stays unchanged; unverified targets, missing indexes and incompatible full-mode models are rejected before serving.
