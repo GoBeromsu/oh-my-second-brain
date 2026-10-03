@@ -4,6 +4,8 @@ Per-host adapter and installer changes belong here.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-03
+
 - **Claude's published marketplace fallback follows the new repository owner.** npm-installed copies now add `Xia-Ataraxia/oh-my-second-brain`, and the marketplace manifest's homepage and repository fields use the same canonical location. The marketplace and plugin names and versions are unchanged.
 
 ## [0.20.6] - 2026-10-01

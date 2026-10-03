@@ -4,6 +4,8 @@ Skills, agents, templates, and host guidance changes belong here.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-03
+
 - **Use the selected dark library README artwork.** The English and Korean READMEs now share the finished native Blender scene with floating pages and knowledge-stars, with readable poster typography and material credits. Setup commands, safety guidance, links, and runtime behavior are unchanged.
 
 - Search and write guidance explains the existing exact-path read-before-edit flow: use the complete source and its returned revision as `ifMatch`, and reread after a stale-write rejection rather than hashing a retrieved slice.
