@@ -1,7 +1,11 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { tmpdir } from "node:os";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+// @ts-expect-error - shared release helper is plain ESM JavaScript without a declaration file
+import { assertBoundMcpRegistration } from "../scripts/release-mcp-registration.mjs";
 
 interface Step {
   name?: string;
@@ -34,6 +38,63 @@ const readRepositoryFile = (path: string): string => readFileSync(new URL(`../${
 const workflowSource = readRepositoryFile(".github/workflows/release.yml");
 const workflow = parse(workflowSource) as Workflow;
 const { verify, publish } = workflow.jobs;
+
+describe("release rehearsal bound MCP registration", () => {
+  it("accepts the verified Node alias, candidate CLI and canonical pointer vault", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "oms-release-bound-"));
+    try {
+      const nodeAlias = path.join(root, "node");
+      symlinkSync(process.execPath, nodeAlias);
+      const cli = path.join(root, "oms.js");
+      const vault = path.join(root, "vault");
+      const vaultAlias = path.join(root, "vault-alias");
+      writeFileSync(cli, "// candidate");
+      mkdirSync(vault);
+      symlinkSync(vault, vaultAlias);
+      expect(() => assertBoundMcpRegistration(
+        { command: nodeAlias, args: [cli, "serve", "mcp", "--vault", vaultAlias] },
+        { node: process.execPath, cli, vault, pointerVault: vault },
+      )).not.toThrow();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each(["bare", "wrong-node", "wrong-cli", "wrong-vault", "wrong-pointer", "missing-pointer", "relative-node", "relative-cli", "wrong-op", "extra-arg"])(
+    "refuses %s instead of weakening the installed-launch gate", (failure) => {
+      const root = mkdtempSync(path.join(tmpdir(), "oms-release-bound-"));
+      try {
+        const cli = path.join(root, "oms.js");
+        const other = path.join(root, "other");
+        const vault = path.join(root, "vault");
+        const otherVault = path.join(root, "other-vault");
+        writeFileSync(cli, "// candidate");
+        writeFileSync(other, "// wrong candidate");
+        mkdirSync(vault); mkdirSync(otherVault);
+        const registration = { command: process.execPath, args: [cli, "serve", "mcp", "--vault", vault] };
+        const expected: { node: string; cli: string; vault: string; pointerVault?: string } = { node: process.execPath, cli, vault, pointerVault: vault };
+        if (failure === "bare") { registration.command = "oms"; registration.args.shift(); }
+        if (failure === "wrong-node") registration.command = other;
+        if (failure === "wrong-cli") registration.args[0] = other;
+        if (failure === "wrong-vault") registration.args[4] = otherVault;
+        if (failure === "wrong-pointer") expected.pointerVault = otherVault;
+        if (failure === "missing-pointer") delete expected.pointerVault;
+        if (failure === "relative-node") registration.command = "node";
+        if (failure === "relative-cli") registration.args[0] = "oms.js";
+        if (failure === "wrong-op") registration.args[2] = "http";
+        if (failure === "extra-arg") registration.args.push("--other");
+        expect(() => assertBoundMcpRegistration(registration, expected)).toThrow();
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    },
+  );
+
+  it("checks the actual installed launch and pointer before using that registration", () => {
+    const smoke = readRepositoryFile("scripts/release-artifact-smoke.mjs");
+    expect(smoke).toContain("assertBoundMcpRegistration(registration, {");
+    expect(smoke).toContain("pointerVault: statusPayload.pointer?.pointer?.vault");
+    expect(smoke).toContain("command: registration.command");
+    expect(smoke).toContain("args: registration.args");
+    expect(smoke).not.toContain('registration?.command !== "oms"');
+  });
+});
 
 function publishEnabled(
   event: string,

@@ -9,6 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { parse as parseYaml } from "yaml";
 import { parseNpmPackManifest } from "./npm-pack-manifest.mjs";
+import { assertBoundMcpRegistration } from "./release-mcp-registration.mjs";
 
 const args = new Set(process.argv.slice(2));
 const runSetup = !args.has("--mcp-only");
@@ -518,11 +519,12 @@ async function crossVersionHostRehearsal(tarball, tempRoot) {
   }
 
   const registration = parseYaml(installedConfig)?.mcp_servers?.oms;
-  if (registration?.command !== "oms" || !Array.isArray(registration.args) ||
-    JSON.stringify(registration.args.slice(0, 3)) !== JSON.stringify(["serve", "mcp", "--vault"]) ||
-    registration.args.length !== 4 || realpathSync(registration.args[3]) !== realpathSync(vault)) {
-    fail("installed Hermes MCP registration does not resolve the candidate vault");
-  }
+  assertBoundMcpRegistration(registration, {
+    node: process.execPath,
+    cli: path.join(installedPackage, "dist", "cli", "oms.js"),
+    vault,
+    pointerVault: statusPayload.pointer?.pointer?.vault,
+  });
   const transport = new StdioClientTransport({
     command: registration.command,
     args: registration.args,
