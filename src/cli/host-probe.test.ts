@@ -59,6 +59,33 @@ function hermesConfig(vault = "/vault"): string {
 }
 
 describe("discoverHostInstallAssets", () => {
+  it.each(["codex", "hermes"] as const)("reports a removed bound Node executable for %s", async runtime => {
+    const home = await homes();
+    const options = { action: "install" as const, runtime, vault: "/vault", adapterRoot: path.resolve(".") };
+    if (runtime === "codex") await installCodex(options, hostSurfaceForRuntime(runtime));
+    else await installHermes(options, hostSurfaceForRuntime(runtime));
+    const config = path.join(home[runtime], runtime === "codex" ? "config.toml" : "config.yaml");
+    const missing = path.join(home[runtime], "removed-keg", "bin", "node");
+    const raw = await readFile(config, "utf8");
+    await writeFile(config, runtime === "codex"
+      ? raw.replace(/^command = .*$/m, `command = ${JSON.stringify(missing)}`)
+      : raw.replace(/command: .*/, `command: ${JSON.stringify(missing)}`));
+    const result = await discoverHostInstallAssets();
+    expect(result.assets).toContainEqual(expect.objectContaining({
+      id: `registration:${runtime}`, evidence: { state: "missing", cause: expect.stringContaining("Configured Node executable is unavailable") },
+    }));
+    expect((await inspectInstalledAssets(result)).status).toBe("degraded");
+  });
+
+  it("reads the Codex executable only from its managed block", async () => {
+    const home = await homes();
+    await installCodex({ action: "install", runtime: "codex", vault: "/vault", adapterRoot: path.resolve(".") }, hostSurfaceForRuntime("codex"));
+    const config = path.join(home.codex, "config.toml");
+    await writeFile(config, 'command = "/missing/unrelated/node"\n' + await readFile(config, "utf8"));
+    const result = await discoverHostInstallAssets();
+    expect(result.assets).toContainEqual(expect.objectContaining({ id: "registration:codex", evidence: { state: "ok", cause: null } }));
+  });
+
   it("resolves relative host overrides identically to installation", async () => {
     const home = await homes();
     process.env.OMS_CODEX_HOME = path.relative(process.cwd(), home.codex);
@@ -182,8 +209,8 @@ describe("discoverHostInstallAssets", () => {
 
     const codex = path.join(home.codex, "config.toml");
     for (const mutation of [
-      (raw: string) => raw.replace('command = "oms"', 'command = "other"'),
-      (raw: string) => raw.replace('args = ["serve", "mcp", "--vault", "/vault"]', 'args = ["serve", "mcp", "--other", "/vault"]'),
+      (raw: string) => raw.replace(/^command = .*$/m, 'command = "other"'),
+      (raw: string) => raw.replace('--vault', '--other'),
       (raw: string) => raw.replace('OMS_AGENT_RUNTIME = "codex"', 'OMS_AGENT_RUNTIME = "other"'),
     ]) {
       await installCodex(options, hostSurfaceForRuntime("codex"));
@@ -192,13 +219,13 @@ describe("discoverHostInstallAssets", () => {
       expect(result.assets).toContainEqual(expect.objectContaining({ id: "registration:codex", evidence: { state: "missing", cause: null } }));
     }
     await installCodex(options, hostSurfaceForRuntime("codex"));
-    await writeFile(codex, (await readFile(codex, "utf8")).replace('command = "oms"', 'command = "oms"\ncommand = "other"'));
+    await writeFile(codex, (await readFile(codex, "utf8")).replace(/^(command = .*)$/m, '$1\ncommand = "other"'));
     result = await discoverHostInstallAssets();
     expect(result.assets).toContainEqual(expect.objectContaining({ id: "registration:codex", evidence: { state: "missing", cause: null } }));
 
     const hermes = path.join(home.hermes, "config.yaml");
     for (const mutation of [
-      (raw: string) => raw.replace("command: oms", "command: other"),
+      (raw: string) => raw.replace(/command: .*/, "command: other"),
       (raw: string) => raw.replace("--vault", "--other"),
       (raw: string) => raw.replace("enabled: true", "enabled: false"),
     ]) {

@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { isAlias, isMap, isScalar, parseAllDocuments, stringify } from "yaml";
 import type { HostOperationOptions } from "./types.js";
+import { omsMcpLaunch } from "./mcp-launch.js";
 
 export class InstallTargetSymlinkError extends Error {
   readonly target: string;
@@ -311,10 +312,7 @@ export function renderYamlEntryPreservingComments(
 }
 
 export function mcpServerEntry(options: HostOperationOptions): Record<string, unknown> {
-  return {
-    command: "oms",
-    args: mcpArgs(options),
-  };
+  return { ...omsMcpLaunch(options.vault) };
 }
 
 export interface ExternalCommandResult {

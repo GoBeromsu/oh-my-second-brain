@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { harnessSurfaceRegistry } from "../../kernel/harness/surface-registry.js";
 import { computeTreeDigest, parseProvenance } from "../../kernel/install/provenance.js";
+import { omsCliPath } from "../../kernel/install/mcp-launch.js";
 import { discoverHostInstallAssets } from "../../cli/host-probe.js";
 import { installHermes, isHermesOmsRegistration, namespaceSkillMarkdown, uninstallHermes } from "./hermes.js";
 
@@ -27,6 +28,24 @@ afterEach(async () => {
 });
 
 describe("installHermes transaction", () => {
+  it("preserves owned assets when a prior package-root launch cannot be recognized", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "oms-hermes-prior-root-"));
+    temporaryDirectories.push(home);
+    const host = harnessSurfaceRegistry.hosts.find(candidate => candidate.runtime === "hermes");
+    if (!host) throw new Error("Hermes surface missing");
+    const options = { action: "install" as const, runtime: "hermes" as const, vault: "/vault", homeDir: home, adapterRoot: path.resolve(".") };
+    await installHermes(options, host);
+    const config = path.join(home, ".hermes", "config.yaml");
+    const skills = path.join(home, ".hermes", "skills", "knowledge-management", "oms");
+    const digest = await computeTreeDigest(skills);
+    const changed = (await readFile(config, "utf8")).replace(omsCliPath(), "/former/package/dist/cli/oms.js");
+    await writeFile(config, changed);
+    await expect(uninstallHermes({ ...options, action: "uninstall" })).rejects.toThrow("MCP launch is unrecognized");
+    expect(await readFile(config, "utf8")).toBe(changed);
+    expect(await computeTreeDigest(skills)).toBe(digest);
+    expect(existsSync(path.join(home, ".hermes", "adapters", "oms", "oms-provenance.json"))).toBe(true);
+  });
+
   it("recognizes only the new managed serve mcp launch", () => {
     const registration = (args: string, command = "oms") =>
       `mcp_servers:\n  oms:\n    command: ${command}\n    args: ${args}\n    enabled: true\n`;

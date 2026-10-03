@@ -150,3 +150,9 @@ oms setup host remove --runtime all --yes
 For Hermes, removal deletes only an installation with valid OMS npm provenance, or an older unrecorded tree that still passes the installer's legacy ownership check. It refuses to delete a foreign or tampered skill tree.
 
 OMS no longer installs a Codex reviewer role. Removal still deletes `~/.codex/agents/oms-reviewer.toml` and its provenance sidecar left by an earlier version, and only when the OMS-written provenance record proves ownership. An unowned role file stays in place and does not stop the rest of Codex cleanup.
+
+## Native runtime consistency
+
+Run package updates and host sync with the Node that owns the installed OMS native dependencies. Before an update mutates its package, OMS checks the global prefix, npm's Node version/modules ABI, and the inherited PATH Node version/modules ABI against the running process. Missing, malformed, or mismatched runtime evidence refuses the update. A matching prefix alone is insufficient. These probes cover the default npm and PATH runtimes; custom script shells, package-local Node executables, and lifecycle scripts choosing explicit runtimes remain outside that check.
+
+Host install/sync then tests the required `better-sqlite3` core in memory before publishing managed launch commands. See [host runtime binding](./adapters.md#host-lifecycle) for stable Homebrew links and runtime-replacement requirements. Do not rebuild a shared package for whichever host happens to fail: first identify its bound Node and package prefix, and compare the native loader error. If a deliberate ABI migration is needed, stage and smoke-test a matching runtime/package pair before changing consumers; retaining or restoring the previous pair is an operator action, not an automatic updater rollback.

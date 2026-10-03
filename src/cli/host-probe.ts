@@ -1,6 +1,8 @@
-import { lstat, readFile } from "node:fs/promises";
+import { access, lstat, readFile } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseDocument } from "yaml";
 import { harnessSurfaceRegistry } from "../kernel/harness/surface-registry.js";
 import type { InstalledAssetDeclaration, InstalledAssetState, InstalledHostDeclaration } from "../kernel/install/asset-health.js";
 import { hostHome } from "../kernel/install/common.js";
@@ -99,6 +101,16 @@ async function registrationEvidence(runtime: "codex" | "hermes", configPath: str
   try {
     const raw = await readFile(configPath, "utf8");
     const valid = runtime === "codex" ? isCodexOmsRegistration(raw, configPath) : isHermesOmsRegistration(raw);
+    if (valid) {
+      const managed = raw.slice(raw.indexOf("# BEGIN OMS MANAGED MCP"), raw.indexOf("# END OMS MANAGED MCP"));
+      const command: unknown = runtime === "codex"
+        ? JSON.parse(/^command = ("(?:[^"\\]|\\.)*")$/m.exec(managed)?.[1] ?? "null")
+        : parseDocument(raw).getIn(["mcp_servers", "oms", "command"]);
+      if (typeof command === "string" && path.isAbsolute(command)) {
+        try { await access(command, constants.X_OK); }
+        catch (error) { return { state: "missing", cause: `Configured Node executable is unavailable (${errorCode(error)}): ${command}` }; }
+      }
+    }
     return { state: valid ? "ok" : "missing", cause: null };
   } catch (error) {
     return errorCode(error) === "ENOENT"

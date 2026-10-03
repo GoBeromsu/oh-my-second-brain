@@ -39,6 +39,13 @@ Claude's guard hook runs `oms hook pre`: it denies a write inside the configured
 
 ## Host lifecycle
 
+Managed host installation records an absolute Node executable and this installed package's `dist/cli/oms.js`, followed by `serve mcp --vault ...`. This avoids selecting a host-bundled Node or another npm prefix through PATH. Legacy bare `oms` registrations remain recognizable for migration. Static plugin fallback manifests are unchanged; this binding applies to the registrations produced by host install/sync.
+
+Before host install/sync writes, the selected runtime opens an in-memory `better-sqlite3` database. A failed check leaves host registrations and the vault pointer unchanged, preserving the original loader error and the selected Node version/ABI. It does not download models, rebuild native modules, or prove optional vector/model-provider compatibility. A missing vector extension does not prevent a core-only lexical installation.
+
+For Homebrew `node@<major>` runtimes, the installer uses the stable `opt` executable only when its resolved path equals the executing Node; a same-major keg update and old-keg cleanup then retain the command. Otherwise it records the concrete executable. Before removing or replacing that runtime, rerun host sync using the package's compatible replacement runtime and verify each affected host. If the package root moves, re-sync the intended hosts before removing old assets; unrecognized Hermes launch registrations block asset removal. Host status checks executable availability for recognized absolute launch registrations, but does not rerun native or model-provider checks. A vanished concrete runtime fails explicitly; there is no automatic fallback to PATH. This does not prevent independent package-manager changes or make shared native artifacts compatible with multiple ABIs.
+
+
 Host lifecycle is explicit: `oms setup host install|remove|sync|status`. Package lifecycle is separate: `oms setup package check|update` never syncs hosts as a side effect. Model lifecycle is `oms setup model install|select|waive|status`. OMS exposes no host launcher, and bridge management is limited to `oms setup bridge add|remove|status` rather than an invented repair action.
 
 To add a host, add a clearly named `assets/<host>/` directory for host-only files, preserve shared skills in `assets/skills/`, declare every shipped path in the harness registry, and keep installer destinations explicit.

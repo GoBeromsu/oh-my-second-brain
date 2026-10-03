@@ -4,7 +4,8 @@ import path from "node:path";
 import type { HarnessHostSurface } from "../../kernel/harness/surface-registry.js";
 import { resolveSharedSkillsSource } from "../../assets/shared-skills.js";
 import { resolveHostAdapterSource } from "../../kernel/install/adapter-source.js";
-import { hostHome, jsonString, mcpArgs, replaceDirectory } from "../../kernel/install/common.js";
+import { hostHome, jsonString, replaceDirectory } from "../../kernel/install/common.js";
+import { omsMcpLaunch, omsMcpVault, type OmsMcpLaunch } from "../../kernel/install/mcp-launch.js";
 import {
   digestOneFile,
   parseProvenance,
@@ -20,14 +21,14 @@ const CODEX_RULE_FILENAME = "oms.md";
 const CODEX_REVIEWER_FILENAME = "oms-reviewer.toml";
 const CODEX_REVIEWER_PROVENANCE_FILENAME = "oms-reviewer.provenance.json";
 
-function codexManagedBlockForVault(vault: string): string {
-  const args = mcpArgs({ vault } as HostOperationOptions).map(jsonString).join(", ");
+function codexManagedBlockForVault(vault: string, launch: OmsMcpLaunch = omsMcpLaunch(vault)): string {
+  const args = launch.args.map(jsonString).join(", ");
   return [
     MANAGED_CODEX_START,
     "# OMS MCP hookup for Codex CLI. Managed by `oms setup host install/remove`.",
     "# Codex-native rules live in ~/.codex/rules/oms.md; skills live in ~/.codex/skills/oms-*.",
     "[mcp_servers.oms]",
-    'command = "oms"',
+    `command = ${jsonString(launch.command)}`,
     `args = [${args}]`,
     "",
     "[mcp_servers.oms.env]",
@@ -43,15 +44,17 @@ export function isCodexOmsRegistration(content: string, configPath = "Codex conf
   const block = managedCodexBlock(content, configPath);
   if (block === undefined) return false;
   const managed = content.slice(block.start, block.end);
-  const vault = /^args = \["serve", "mcp", "--vault", ("(?:[^"\\]|\\.)*")\]$/m.exec(managed)?.[1];
-  if (vault === undefined) return false;
-  let parsedVault: unknown;
+  const command = /^command = ("(?:[^"\\]|\\.)*")$/m.exec(managed)?.[1];
+  const args = /^args = (\[.*\])$/m.exec(managed)?.[1];
+  if (command === undefined || args === undefined) return false;
+  let launch: OmsMcpLaunch;
   try {
-    parsedVault = JSON.parse(vault);
+    launch = { command: JSON.parse(command) as string, args: JSON.parse(args) as string[] };
   } catch {
     return false;
   }
-  return typeof parsedVault === "string" && managed === codexManagedBlockForVault(parsedVault);
+  const vault = omsMcpVault(launch.command, launch.args);
+  return vault !== null && managed === codexManagedBlockForVault(vault, launch);
 }
 
 function isCodexOMSTable(line: string): boolean {

@@ -21,6 +21,7 @@ import {
   replaceDirectory,
 } from "../../kernel/install/common.js";
 import type { HostOperationOptions, HostOperationResult } from "../../kernel/install/types.js";
+import { omsMcpVault, omsMcpLaunch } from "../../kernel/install/mcp-launch.js";
 
 const HERMES_SKILL_CATEGORY = "knowledge-management";
 const HERMES_SKILL_NAME = "oms";
@@ -127,12 +128,7 @@ export function isHermesOmsRegistration(raw: string): boolean {
   const entry = (servers as Record<string, unknown>)["oms"];
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return false;
   const actual = entry as Record<string, unknown>;
-  const args = actual["args"];
-  return actual["command"] === "oms"
-    && actual["enabled"] === true
-    && Array.isArray(args)
-    && typeof args[3] === "string"
-    && args.join("\0") === ["serve", "mcp", "--vault", args[3]].join("\0");
+  return actual["enabled"] === true && omsMcpVault(actual["command"], actual["args"]) !== null;
 }
 
 function refuseSymlink(target: string): void {
@@ -167,8 +163,9 @@ async function verifyHermesInstall(configPath: string, skillTarget: string, opti
   const document = parseDocument(text);
   const parsed = document.toJS() as Record<string, unknown>;
   const servers = parsed.mcp_servers as Record<string, unknown>;
-  const actual = servers.oms as { readonly args: readonly string[] };
-  if (actual.args[3] !== options.vault) {
+  const actual = servers.oms as { readonly command: unknown; readonly args: unknown };
+  const expected = omsMcpLaunch(options.vault);
+  if (actual.command !== expected.command || JSON.stringify(actual.args) !== JSON.stringify(expected.args)) {
     throw new Error("Hermes config verification failed: mcp_servers.oms does not match the expected entry");
   }
   const installed = new Set(await readdir(skillTarget));
@@ -440,6 +437,9 @@ export async function uninstallHermes(options: HostOperationOptions): Promise<Ho
   if (preImage && !preImage.equals(Buffer.from(configRaw, "utf8"))) throw new Error("Hermes config.yaml is not valid UTF-8");
   for (const target of [adapterTarget, skillTarget, legacyPluginTarget, legacyMcpPath, configPath, provenanceTarget]) refuseSymlink(target);
   const ownsRegistration = isHermesOmsRegistration(configRaw);
+  if (ownsInstall && !ownsRegistration && parseDocument(configRaw).getIn(HERMES_MCP_ENTRY_PATH) !== undefined) {
+    throw new Error("Refusing to remove Hermes OMS assets while its MCP launch is unrecognized. Keep the existing assets and config; run host sync with the intended package/runtime before removal.");
+  }
   const config = ownsRegistration
     ? renderYamlEntryPreservingComments(configRaw, HERMES_MCP_ENTRY_PATH, { kind: "delete" })
     : { text: configRaw, changed: false };

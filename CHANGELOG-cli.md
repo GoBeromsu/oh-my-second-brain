@@ -4,6 +4,8 @@ Changes to the `oms` command surface belong here.
 
 ## [Unreleased]
 
+- Host install and sync smoke-test the running Node against the package’s required SQLite core before publishing registrations or a vault pointer; failures report runtime identity without rebuilding shared addons.
+
 ## [0.21.0] - 2026-10-03
 
 - Enabled HTTP maintenance cancels immediately when shutdown is requested, even when a client leaves a request body unfinished. Connections have a bounded drain period and repeated close calls reuse one shutdown.
