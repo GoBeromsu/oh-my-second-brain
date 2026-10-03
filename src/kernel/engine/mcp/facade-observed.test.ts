@@ -8,7 +8,7 @@ import { LiveLexicalSession } from "../embed/live-lexical.js";
 import { AxisObservationStore } from "../axes/store.js";
 import { syncEngineStore } from "../embed/sync.js";
 import { writeContractVault } from "../../../../test/fixtures/contract-vault-fixture.js";
-import { normalizeQueryOptions } from "./query-mapper.js";
+import { normalizeQueryOptions, PUBLIC_FACET_SUMMARY_MAX_BYTES } from "./query-mapper.js";
 import { normalizeSearchRequest } from "../../searchbackend/search-backend.js";
 import type { McpSemanticQueryOptions } from "./types.js";
 
@@ -77,7 +77,7 @@ describe("live observed metadata query integration", () => {
     expect(ordinary).not.toHaveProperty("observed");
   });
 
-  it("omits unbounded legacy facets only for zero-hit observed discovery", async () => {
+  it("bounds ordinary oversized facets while preserving zero-hit observed discovery", async () => {
     const oversized = "x".repeat(65_536);
     await writeContractVault(vault, {
       properties: { declared: { type: "text", intent: "Synthetic declared field." } },
@@ -87,8 +87,13 @@ describe("live observed metadata query integration", () => {
     await note("a.md", `template: fixture\ndeclared: ${oversized}`);
     const adapter = engine().adapter;
     const ordinary = await adapter.semanticQuery({ query: "needle", limit: 0 });
-    expect(ordinary.available).toBe(true);
-    expect(ordinary.facets.some(facet => facet.key === "declared" && facet.value === oversized)).toBe(true);
+    expect(ordinary).toMatchObject({ available: true, totalCount: 1, hits: [], cursor: "0" });
+    expect(ordinary.facets.some(facet => facet.key === "declared")).toBe(false);
+    expect(ordinary.receipt.warnings).toContainEqual(expect.stringContaining("Facet byte limits omitted entries without shortening them"));
+    expect(Buffer.byteLength(JSON.stringify(ordinary.facets))).toBeLessThanOrEqual(PUBLIC_FACET_SUMMARY_MAX_BYTES);
+    const hits = await adapter.semanticQuery({ query: "needle", limit: 5 });
+    expect(hits).toMatchObject({ available: true, totalCount: 1, hits: [{ path: "a.md" }], cursor: null, facets: ordinary.facets });
+    expect(hits.receipt.warnings).toEqual(ordinary.receipt.warnings);
     const discovery = await adapter.semanticQuery({ query: "needle", limit: 0, observed: { discover: { key: "declared" } } });
     expect(discovery).toMatchObject({ available: true, hits: [], facets: [], observed: { discovery: { totalCount: 1, omittedCount: 1, values: [] } } });
     expect(Buffer.byteLength(JSON.stringify(discovery))).toBeLessThan(32 * 1024);

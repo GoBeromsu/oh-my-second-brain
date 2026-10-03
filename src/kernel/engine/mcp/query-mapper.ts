@@ -35,6 +35,10 @@ export interface NormalizedQueryOptions {
 const DEFAULT_QUERY_LIMIT = 10;
 /** Public query responses summarize at most this many distinct facet values. */
 export const PUBLIC_FACET_SUMMARY_LIMIT = 20;
+/** Omit oversized identifiers intact; a shortened identifier would name another value. */
+export const PUBLIC_FACET_MAX_VALUE_BYTES = 512;
+/** Budget the root facet array in two-space CLI/MCP JSON, including indentation/escaping. */
+export const PUBLIC_FACET_SUMMARY_MAX_BYTES = 32 * 1024;
 
 /**
  * Normalize every query shape once before dispatch:
@@ -210,7 +214,7 @@ export function queryOptionsToSubQueries(opts: McpSemanticQueryOptions): TypedSu
 // ---------------------------------------------------------------------------
 
 /**
- * Bound a public facet list without changing its order or mutating the input.
+ * Bound a public facet list without changing identifiers, order or the input.
  * Collection aggregation must call this only after the global merge.
  */
 export function summarizePublicFacets(
@@ -218,14 +222,40 @@ export function summarizePublicFacets(
   warnings: readonly string[] = [],
 ): { readonly facets: readonly McpSemanticFacet[]; readonly warnings: readonly string[] } {
   const values = facets ?? [];
-  if (values.length <= PUBLIC_FACET_SUMMARY_LIMIT) {
+  const retained: McpSemanticFacet[] = [];
+  let bytes = 2; // The serialized array's brackets.
+  let byteLimited = false;
+  for (const facet of values) {
+    if (retained.length === PUBLIC_FACET_SUMMARY_LIMIT) break;
+    if (Buffer.byteLength(facet.value) > PUBLIC_FACET_MAX_VALUE_BYTES
+      || (facet.key !== undefined && Buffer.byteLength(facet.key) > PUBLIC_FACET_MAX_VALUE_BYTES)
+      // Avoid serializing arbitrarily large intent text just to learn it cannot fit.
+      || Buffer.byteLength(facet.intent) > PUBLIC_FACET_SUMMARY_MAX_BYTES) {
+      byteLimited = true;
+      continue;
+    }
+    const encoded = JSON.stringify(facet, null, 2);
+    // CLI/MCP emit facets as a root field: each item's lines gain four spaces.
+    // The first entry adds two newlines and the closing bracket's two spaces;
+    // later entries add a comma and newline. Compact transports are smaller.
+    const added = Buffer.byteLength(encoded) + 4 * encoded.split("\n").length
+      + (retained.length === 0 ? 4 : 2);
+    if (bytes + added > PUBLIC_FACET_SUMMARY_MAX_BYTES) {
+      byteLimited = true;
+      continue;
+    }
+    retained.push(facet);
+    bytes += added;
+  }
+  if (retained.length === values.length) {
     return { facets: values, warnings };
   }
   return {
-    facets: values.slice(0, PUBLIC_FACET_SUMMARY_LIMIT),
+    facets: retained,
     warnings: [
       ...warnings,
-      `Facets truncated: showing ${PUBLIC_FACET_SUMMARY_LIMIT} of ${values.length} distinct values.`,
+      `Facets truncated: showing ${retained.length} of ${values.length} distinct values.`,
+      ...(byteLimited ? [`Facet byte limits omitted entries without shortening them: keys and values are limited to ${PUBLIC_FACET_MAX_VALUE_BYTES} UTF-8 bytes; the facet array in two-space CLI/MCP JSON is limited to ${PUBLIC_FACET_SUMMARY_MAX_BYTES} bytes.`] : []),
     ],
   };
 }

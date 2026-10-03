@@ -497,6 +497,37 @@ describe("EngineSearchBackend collection envelope", () => {
 });
 
 describe("EngineSearchBackend merged facet summary", () => {
+  it("omits oversized merged facets only after aggregation without changing hit pages or counts", async () => {
+    const oversized = { axis: "field" as const, key: "subject", value: "x".repeat(513), count: 4, intent: "Subject" };
+    const shared = { axis: "folder" as const, value: "shared", count: 3, intent: "Shared notes" };
+    const adapter = {
+      semanticQuery: vi.fn(async ({ collectionPath, limit }: { readonly collectionPath?: string; readonly limit?: number }) => {
+        expect(limit).toBeUndefined();
+        const prefix = collectionPath ?? "missing";
+        return {
+          available: true as const,
+          hits: [{ docid: `${prefix}.md`, score: 1, uri: `vault://${prefix}.md`, path: `${prefix}.md`, snippet: "", evidence: { lexical: true, vector: false } }],
+          totalCount: 1,
+          facets: [oversized, shared],
+          cursor: null,
+          receipt: { usedChannels: ["lex" as const], approximated: false, indexDrift: false, warnings: [] },
+        };
+      }),
+    } as unknown as McpEngineAdapter;
+    const backend = new EngineSearchBackend(adapter, "/vault");
+    const forward = await backend.search({ query: "query", collections: ["alpha", "zeta"], limit: 1 });
+    const next = await backend.search({ query: "query", collections: ["zeta", "alpha"], limit: 1, cursor: "1" });
+    expect(forward).toMatchObject({ available: true, totalCount: 2, cursor: "1", hits: [{ path: "alpha.md" }], facets: [{ ...shared, count: 6 }] });
+    expect(next).toMatchObject({ totalCount: 2, cursor: null, hits: [{ path: "zeta.md" }], facets: forward.facets });
+    expect(forward.receipt.warnings).toEqual([
+      "Facets truncated: showing 1 of 2 distinct values.",
+      expect.stringContaining("Facet byte limits omitted entries without shortening them"),
+    ]);
+    expect(next.receipt.warnings).toEqual(forward.receipt.warnings);
+    expect(oversized.value).toHaveLength(513);
+    expect([oversized.count, shared.count]).toEqual([4, 3]);
+  });
+
   it("caps merged collection facets after combining complete child inputs", async () => {
     const childFacets = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => ({
       axis: "link" as const,
