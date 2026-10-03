@@ -8,11 +8,14 @@ import {
   queryResultUnavailable,
   retrievalResultsToQueryResult,
   PUBLIC_FACET_SUMMARY_LIMIT,
+  PUBLIC_FACET_MAX_VALUE_BYTES,
+  PUBLIC_FACET_SUMMARY_MAX_BYTES,
   summarizePublicFacets,
 } from "./query-mapper.js";
-import type { McpSemanticQueryOptions } from "./types.js";
+import type { McpSemanticFacet, McpSemanticQueryOptions } from "./types.js";
 import { semanticQueryOptionsFromArgs } from "../../semantic/semantic-retrieve-args.js";
-import { parseSearchArgs, searchQueryOptions } from "../../../cli/search-args.js";
+import { parseSearchArgs, printJson, searchQueryOptions } from "../../../cli/search-args.js";
+import { jsonText } from "../../../mcp/tools/shared.js";
 import type { RetrievalResult } from "../types.js";
 import { filterNodesByQueryAxes } from "../graph/node.js";
 import type { EngineGraphNode } from "../graph/node.js";
@@ -508,6 +511,88 @@ describe("retrievalResultsToQueryResult — filtering and limits", () => {
 describe("retrievalResultsToQueryResult — public facet summary", () => {
   const HIT_HIGH = makeResult("high.md", 0.9, { lex: 0.9 });
   const HIT_MID = makeResult("mid.md", 0.7, { vec: 0.7 });
+
+  const facet = (value: string, extra: Partial<McpSemanticFacet> = {}): McpSemanticFacet => ({
+    axis: "field", key: "subject", value, count: 3, intent: "Subject", ...extra,
+  });
+  const transportFacetBytes = (facets: readonly McpSemanticFacet[]): number => {
+    const content = jsonText({ facets }).content[0];
+    if (content?.type !== "text") throw new Error("Expected MCP text response");
+    const text = content.text;
+    let cli = "";
+    printJson(message => { cli = message; }, { facets });
+    expect(cli).toBe(text);
+    return Buffer.byteLength(text.slice(text.indexOf("["), text.lastIndexOf("]") + 1));
+  };
+
+  it("omits oversized keys and values without shortening exact identifiers or mutating inputs", () => {
+    const exact = "한".repeat(170) + "ab";
+    expect(Buffer.byteLength(exact)).toBe(PUBLIC_FACET_MAX_VALUE_BYTES);
+    const values = [
+      facet("x".repeat(PUBLIC_FACET_MAX_VALUE_BYTES + 1)),
+      facet(exact + "c"),
+      facet("short", { key: "k".repeat(PUBLIC_FACET_MAX_VALUE_BYTES + 1) }),
+      facet(exact, { key: exact }),
+      facet("  Case and spaces stay exact  "),
+    ];
+    const before = JSON.stringify(values);
+    const summary = summarizePublicFacets(values, ["existing warning"]);
+    expect(summary.facets).toEqual(values.slice(3));
+    expect(summary.facets[0]).toBe(values[3]);
+    expect(summary.warnings).toEqual([
+      "existing warning",
+      "Facets truncated: showing 2 of 5 distinct values.",
+      expect.stringContaining("Facet byte limits omitted entries without shortening them"),
+    ]);
+    expect(JSON.stringify(values)).toBe(before);
+  });
+
+  it("bounds the serialized array including JSON escaping and keeps later fitting entries", () => {
+    const values = Array.from({ length: 20 }, (_, index) => facet("\u0000".repeat(512), {
+      key: "\u0001".repeat(512), intent: "\u0002".repeat(512), count: index + 1,
+    }));
+    values.splice(1, 0, facet("huge intent", { intent: "x".repeat(1_000_000) }));
+    values.push(facet("small tail"));
+    const summary = summarizePublicFacets(values);
+    expect(summary.facets.length).toBeLessThan(PUBLIC_FACET_SUMMARY_LIMIT);
+    expect(summary.facets.at(-1)).toEqual(values.at(-1));
+    expect(Buffer.byteLength(JSON.stringify(summary.facets))).toBeLessThanOrEqual(PUBLIC_FACET_SUMMARY_MAX_BYTES);
+    expect(transportFacetBytes(summary.facets)).toBeLessThanOrEqual(PUBLIC_FACET_SUMMARY_MAX_BYTES);
+    expect(summary.warnings[0]).toBe(`Facets truncated: showing ${summary.facets.length} of ${values.length} distinct values.`);
+    expect(summary.warnings[1]).toContain("32768 bytes");
+    expect(summarizePublicFacets(values)).toEqual(summary);
+  });
+
+  it("accepts the exact serialized byte boundary and omits an entry one byte over", () => {
+    const empty = facet("exact", { intent: "" });
+    const atBoundary = { ...empty, intent: "x".repeat(PUBLIC_FACET_SUMMARY_MAX_BYTES - transportFacetBytes([empty])) };
+    expect(transportFacetBytes([atBoundary])).toBe(PUBLIC_FACET_SUMMARY_MAX_BYTES);
+    expect(summarizePublicFacets([atBoundary])).toEqual({ facets: [atBoundary], warnings: [] });
+    const overBoundary = { ...atBoundary, intent: atBoundary.intent + "x" };
+    const short = facet("later");
+    expect(summarizePublicFacets([overBoundary, short])).toMatchObject({ facets: [short], warnings: [
+      "Facets truncated: showing 1 of 2 distinct values.", expect.any(String),
+    ] });
+    expect(summarizePublicFacets([overBoundary])).toMatchObject({ facets: [], warnings: [
+      "Facets truncated: showing 0 of 1 distinct values.", expect.any(String),
+    ] });
+  });
+
+  it("keeps byte omission independent of hit paging and retains complete collection-child input", () => {
+    const values = [facet("x".repeat(513)), facet("kept")];
+    const results = [HIT_HIGH, HIT_MID];
+    const first = retrievalResultsToQueryResult(results, { limit: 1, facetValues: values });
+    const next = retrievalResultsToQueryResult(results, { limit: 1, cursor: "1", facetValues: values });
+    const none = retrievalResultsToQueryResult(results, { limit: 0, facetValues: values });
+    expect(first).toMatchObject({ totalCount: 2, cursor: "1", facets: [values[1]] });
+    expect(next).toMatchObject({ totalCount: 2, cursor: null, hits: [{ path: "mid.md" }], facets: first.facets });
+    expect(none).toMatchObject({ totalCount: 2, cursor: "0", hits: [], facets: first.facets });
+    expect(next.receipt.warnings).toEqual(first.receipt.warnings);
+    expect(none.receipt.warnings).toEqual(first.receipt.warnings);
+    const child = retrievalResultsToQueryResult(results, { facetValues: values, deferFacetSummary: true });
+    expect(child.facets).toEqual(values);
+    expect(child.receipt.warnings).toEqual([]);
+  });
 
   it("keeps 0, 19, and 20 facets unchanged without a truncation warning", () => {
     const warning = "existing retrieval warning";
