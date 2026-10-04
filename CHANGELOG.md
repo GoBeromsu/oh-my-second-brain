@@ -10,6 +10,8 @@ This aggregate changelog contains changes that span multiple layers.
 
 ## [Unreleased]
 
+- **Managed MCP launches stay on a verified Node runtime.** Managed Claude, Codex, and Hermes MCP registrations keep the Node binary and OMS CLI that were verified at registration time, and use the verified Homebrew major-scoped `opt` path when one is available. Install and sync check native SQLite before changing any registration or vault pointer, and update rejects an npm/PATH Node version or ABI mismatch instead of continuing. The static plugin fallback and direct bare `oms` invocations still depend on `PATH`.
+
 ## [0.21.0] - 2026-10-03
 
 - Release rehearsals use a read-only verification job with no OIDC grant and never invoke npm publish, including dry runs. Manual dispatch on a tag or with `rehearsal=false` cannot publish or create a GitHub Release; publication requires a verified `oms-v*` tag push in a separate privileged job. The npm trusted-publisher transfer hold still applies.
