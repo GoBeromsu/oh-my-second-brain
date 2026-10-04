@@ -7,6 +7,7 @@ import { harnessSurfaceRegistry } from "../../kernel/harness/surface-registry.js
 import { digestOneFile } from "../../kernel/install/provenance.js";
 import { discoverHostInstallAssets } from "../../cli/host-probe.js";
 import { installCodex, isCodexOmsRegistration, uninstallCodex } from "./codex.js";
+import { omsMcpLaunch } from "../../kernel/install/mcp-launch.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -38,7 +39,7 @@ describe("Codex managed OMS registration", () => {
     }, codexHost());
 
     const config = await readFile(path.join(home, ".codex", "config.toml"), "utf8");
-    expect(config).toContain('args = ["serve", "mcp", "--vault", "/vault"]');
+    expect(config).toContain(`args = [${omsMcpLaunch("/vault").args.map(arg => JSON.stringify(arg)).join(", ")}]`);
     expect(isCodexOmsRegistration(config)).toBe(true);
     const previous = process.env.OMS_CODEX_HOME;
     process.env.OMS_CODEX_HOME = path.join(home, ".codex");

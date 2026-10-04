@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Managed MCP launches bind the setup Node and installed CLI, preferring a verified major-scoped Homebrew opt link. ABI diagnostics direct hosts back to the owning runtime instead of suggesting a shared-package rebuild. Package updates reject npm or PATH Node version/ABI mismatches even when the global prefix agrees.
+
 ## [0.21.0] - 2026-10-03
 
 - Default public facet summaries now bound payload bytes as well as cardinality: at most 20 entries and 32 KiB of serialized array JSON including the two-space CLI/MCP indentation, omitting keys or values over 512 UTF-8 bytes without changing their identities. Warnings disclose retained/total counts and byte-limit omissions; complete collection aggregation, hit ranking, counts and pagination remain unchanged. This bounds the facet array, not the whole response or aggregation memory.

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -48,14 +48,27 @@ function makeInstalledCli(prefix: string): string {
   return path.join(packageRoot, "dist", "cli", "oms.js");
 }
 
-function installFakeNpm(bin: string, prefix: string, installError: string, hostMarker: string): void {
+function installFakeNpm(
+  bin: string,
+  prefix: string,
+  installError: string,
+  hostMarker: string,
+  npmRuntime = { node: process.versions.node, modules: process.versions.modules },
+  installMarker?: string,
+): void {
   mkdirSync(bin, { recursive: true });
+  symlinkSync(process.execPath, path.join(bin, "node"));
   const npm = path.join(bin, "npm");
   writeFileSync(npm, `#!/bin/sh
 if [ "$1" = "prefix" ] && [ "$2" = "-g" ]; then
   printf '%s\\n' "${prefix}"
   exit 0
 fi
+if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
+  printf '%s\\n' '${JSON.stringify(npmRuntime)}'
+  exit 0
+fi
+${installMarker === undefined ? "" : `if [ "$1" = "install" ]; then touch "${installMarker}"; fi`}
 printf '%s\\n' "${installError}" >&2
 exit 23
 `, "utf-8");
@@ -68,6 +81,18 @@ touch "${hostMarker}"
 exit 0
 `, "utf-8");
   chmodSync(oms, 0o755);
+}
+
+function hashTree(root: string): string {
+  const hash = createHash("sha256");
+  for (const entry of readdirSync(root, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+    const pathname = path.join(root, entry.name);
+    hash.update(`${entry.name}\0`);
+    if (entry.isSymbolicLink()) hash.update(`link\0${readlinkSync(pathname)}`);
+    else if (entry.isDirectory()) hash.update(`dir\0${hashTree(pathname)}`);
+    else hash.update(readFileSync(pathname));
+  }
+  return hash.digest("hex");
 }
 
 afterEach(() => {
@@ -171,5 +196,42 @@ describe("oms setup package update isolated e2e", () => {
     expect(result.stdout).not.toContain("Successfully updated");
     expect(readFileSync(owned, "utf-8")).toBe(before);
     expect(existsSync(hostMarker)).toBe(false);
+  });
+
+  it("rejects a matching npm prefix with a different runtime without changing installed package or host bytes", () => {
+    const cwd = makeTempRoot("oms-update-runtime-mismatch-");
+    const prefix = makeTempRoot("oms-update-prefix-");
+    const home = makeTempRoot("oms-update-home-");
+    const bin = path.join(makeTempRoot("oms-update-fake-bin-"), "bin");
+    const cli = makeInstalledCli(prefix);
+    const packageRoot = path.join(prefix, "lib", "node_modules", "oh-my-second-brain");
+    const hostDir = path.join(home, ".hermes");
+    mkdirSync(hostDir);
+    writeFileSync(path.join(hostDir, "config.yaml"), "mcp_servers:\n  oms:\n    command: oms\n", "utf-8");
+    const hostMarker = path.join(cwd, "host-sync-ran");
+    const installMarker = path.join(cwd, "npm-install-ran");
+    const npmRuntime = {
+      node: process.versions.node === "26.0.0" ? "24.19.0" : "26.0.0",
+      modules: process.versions.modules === "147" ? "137" : "147",
+    };
+    installFakeNpm(bin, realpathSync(prefix), "installation must not run", hostMarker, npmRuntime, installMarker);
+    const packageBefore = hashTree(packageRoot);
+    const hostBefore = hashTree(hostDir);
+    const hostCommandBefore = readFileSync(path.join(prefix, "bin", "oms"));
+
+    const result = runCli(["setup", "package", "update", "--yes"], cwd, {
+      HOME: home,
+      XDG_CONFIG_HOME: path.join(home, ".config"),
+      PATH: `${bin}${path.delimiter}${process.env["PATH"] ?? ""}`,
+    }, cli);
+
+    expect(result.status).toBe(1);
+    expect(`${result.stdout}${result.stderr}`).toContain(`npm uses Node ${npmRuntime.node} (ABI ${npmRuntime.modules})`);
+    expect(existsSync(installMarker)).toBe(false);
+    expect(existsSync(hostMarker)).toBe(false);
+    expect(hashTree(packageRoot)).toBe(packageBefore);
+    expect(hashTree(hostDir)).toBe(hostBefore);
+    expect(readFileSync(path.join(prefix, "bin", "oms"))).toEqual(hostCommandBefore);
+    expect(readdirSync(cwd)).toEqual([]);
   });
 });

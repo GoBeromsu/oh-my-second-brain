@@ -29,6 +29,7 @@ import {
 import { inspectInstalledAssets } from "../kernel/install/asset-health.js";
 import { resolveEffectiveVault } from "../kernel/link/link.js";
 import { resolveBundledAssetPaths } from "../kernel/runtime/assets.js";
+import { assertOmsNativeRuntime } from "../kernel/install/mcp-launch.js";
 import { HOOK_MATCHER, READ_MATCHER, installClaude, isOmsHookEntry, uninstallClaude } from "../vendors/claude/claude.js";
 import { installCodex, isCodexOmsRegistration, uninstallCodex } from "../vendors/codex/codex.js";
 import { installHermes, isHermesOmsRegistration, uninstallHermes } from "../vendors/hermes/hermes.js";
@@ -88,6 +89,7 @@ async function runStampedInstallOrUninstall(
   action: "install" | "uninstall",
   context: HostCommandContext,
 ): Promise<{ readonly results: HostOperationResult[]; readonly failed: boolean; readonly pointer: HostVaultPointerReceipt }> {
+  if (action === "install" && !context.dryRun) assertOmsNativeRuntime();
   const pointer = await readHostVaultPointerForRepair({ dryRun: context.dryRun });
   const requestedVault = action === "install"
     ? await canonicalHostVault(context.vault)
@@ -159,6 +161,7 @@ async function runHostInstallOrRemove(
 async function runHostSync(context: HostCommandContext): Promise<number> {
   let pointer: HostVaultPointerReceipt;
   try {
+    if (!context.dryRun) assertOmsNativeRuntime();
     pointer = await (context.vaultExplicit
       ? readHostVaultPointerForRepair({ dryRun: context.dryRun })
       : readHostVaultPointer({ dryRun: context.dryRun }));

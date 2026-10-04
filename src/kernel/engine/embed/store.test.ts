@@ -106,7 +106,9 @@ describe("better-sqlite3 native addon opening", () => {
     expect(message).toContain("better_sqlite3.node");
     expect(message).toContain("built NODE_MODULE_VERSION=137");
     expect(message).toContain("loader-required NODE_MODULE_VERSION=127");
-    expect(message).toContain("npm rebuild better-sqlite3");
+    expect(message).toContain("oms setup host sync");
+    expect(message).toContain("Do not rebuild a shared package for a different host PATH");
+    expect(message).not.toContain("run \"npm rebuild better-sqlite3\"");
   });
 
   it.each([new Error("database path is not accessible"), "native loader failed", null])(

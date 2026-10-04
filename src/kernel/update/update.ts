@@ -231,6 +231,45 @@ function samePrefix(left: string, right: string): boolean {
     : path.resolve(left) === path.resolve(right);
 }
 
+const NODE_RUNTIME_PROBE = "JSON.stringify({node:process.versions.node,modules:process.versions.modules})";
+
+async function verifyUpdateRuntime(
+  runner: UpdateRunner,
+  timeoutMs: number,
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }> {
+  // npm may use an explicit Node while lifecycle commands resolve `node` from
+  // PATH. Check both: a matching global prefix alone says nothing about ABI.
+  // This checks their default runtimes, not package scripts that deliberately
+  // choose another executable or a package-local node binary.
+  for (const [command, args, label] of [
+    ["npm", ["version", "--json"], "npm"],
+    ["node", ["-p", NODE_RUNTIME_PROBE], "PATH node used by npm lifecycle scripts"],
+  ] as const) {
+    const result = await runner(command, args, { timeoutMs });
+    let runtime: unknown;
+    try {
+      runtime = JSON.parse(result.stdout);
+    } catch {
+      runtime = null;
+    }
+    if (result.exitCode !== 0 || runtime === null || typeof runtime !== "object"
+      || !("node" in runtime) || typeof runtime.node !== "string"
+      || !("modules" in runtime) || typeof runtime.modules !== "string") {
+      return {
+        ok: false,
+        error: `Refusing to update: unable to verify the Node runtime used by ${label}. ${result.stderr.trim() || "The runtime probe did not return a Node version and modules ABI."} Select the same Node installation for OMS, npm, and PATH node, then retry \`oms setup package update --yes\`.`,
+      };
+    }
+    if (runtime.node !== process.versions.node || runtime.modules !== process.versions.modules) {
+      return {
+        ok: false,
+        error: `Refusing to update: running OMS uses Node ${process.versions.node} (ABI ${process.versions.modules}), but ${label} uses Node ${runtime.node} (ABI ${runtime.modules}). Select the same Node installation for OMS, npm, and PATH node, then retry \`oms setup package update --yes\`.`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
 async function resolveNpmTopology(
   options: RunUpdateOptions,
   runner: UpdateRunner,
@@ -272,7 +311,7 @@ async function resolveNpmTopology(
       error: `Refusing to update: npm global prefix ${npmPrefix} is not writable: ${detail}. After restoring write access, run \`npm --prefix ${npmPrefix} install -g ${options.packageName ?? DEFAULT_PACKAGE_NAME}@latest\`, then run the newly installed \`oms setup host sync\`.`,
     };
   }
-  return { ok: true };
+  return verifyUpdateRuntime(runner, timeoutMs);
 }
 
 export async function runUpdate(options: RunUpdateOptions): Promise<UpdateResult> {

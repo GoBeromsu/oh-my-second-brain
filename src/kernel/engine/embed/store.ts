@@ -97,7 +97,7 @@ function openDatabase(
       `Runtime: process.execPath=${process.execPath}; process.version=${process.version}; process.versions.modules=${runtimeAbi}.`,
       `Addon: ${mismatch.addonPath}; built NODE_MODULE_VERSION=${mismatch.addonAbi}; loader-required NODE_MODULE_VERSION=${mismatch.runtimeAbiFromMessage}.`,
       `Underlying error: ${error.message}`,
-      `No rebuild was attempted. From the OMS installation directory "${OMS_PACKAGE_ROOT}", run "npm rebuild better-sqlite3" with this exact Node runtime, then restart the MCP host.`,
+      `No rebuild was attempted. Check the MCP host's bound Node and OMS installation "${OMS_PACKAGE_ROOT}" against the runtime above. Run "oms setup host sync" using the Node that owns this package's native dependencies, then reload the affected host. Do not rebuild a shared package for a different host PATH; a deliberate ABI migration requires a separately verified runtime/package pair.`,
     ].join(" ");
     throw new EngineStoreOpenError("native-abi-mismatch", message, { cause: error });
   }
