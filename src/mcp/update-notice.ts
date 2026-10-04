@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import {
   closeSync,
   mkdirSync,
@@ -11,7 +12,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { compareVersions, resolveLatestVersion, type UpdateRunner } from "../kernel/update/update.js";
+import { compareVersions, resolveLatestVersion, type UpdateRunner, type UpdateRunnerCall } from "../kernel/update/update.js";
 
 /**
  * Boot-time update nudge for the MCP server.
@@ -52,6 +53,55 @@ const REFRESH_TIMEOUT_MS = 4_000;
 const PACKAGE_NAME = "oh-my-second-brain";
 
 let refreshStarted = false;
+
+interface RefreshScope {
+  readonly controller: AbortController;
+  child: Promise<UpdateRunnerCall> | null;
+}
+
+let scheduledRefresh: RefreshScope | null = null;
+
+/** Capture the optional registry query without blocking the MCP event loop. */
+function noticeRunner(scope: RefreshScope): UpdateRunner {
+  return (command, args, options) => {
+    scope.child = new Promise<UpdateRunnerCall>(resolve => {
+      let result: UpdateRunnerCall | undefined;
+      let closed = false;
+      const finish = (): void => { if (closed && result !== undefined) resolve(result); };
+      try {
+        const child = execFile(command, [...args], {
+          encoding: "utf8",
+          timeout: options.timeoutMs,
+          maxBuffer: 64 * 1024,
+          killSignal: "SIGKILL",
+          windowsHide: true,
+          env: options.env === undefined ? process.env : { ...process.env, ...options.env },
+        }, (error, stdout, stderr) => {
+          result = {
+            exitCode: error === null ? 0 : typeof error.code === "number" ? error.code : 1,
+            stdout,
+            stderr: error?.message ?? stderr,
+          };
+          finish();
+        });
+        // execFile's AbortSignal may use SIGTERM and clear its deadline before
+        // an uncooperative child exits. Keep the deadline and kill our child
+        // explicitly; cancellation never resolves before actual closure.
+        const cancel = (): void => { child.kill("SIGKILL"); };
+        scope.controller.signal.addEventListener("abort", cancel, { once: true });
+        child.once("close", () => {
+          scope.controller.signal.removeEventListener("abort", cancel);
+          closed = true;
+          finish();
+        });
+        if (scope.controller.signal.aborted) cancel();
+      } catch (error) {
+        resolve({ exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) });
+      }
+    });
+    return scope.child;
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -180,6 +230,10 @@ function writeCacheAtomically(cachePath: string, cache: UpdateNoticeCache): void
 export async function refreshUpdateNoticeCache(
   options: RefreshUpdateNoticeCacheOptions,
 ): Promise<void> {
+  return refreshCache(options, { controller: new AbortController(), child: null });
+}
+
+async function refreshCache(options: RefreshUpdateNoticeCacheOptions, scope: RefreshScope): Promise<void> {
   const env = options.env ?? process.env;
   if (noticeSuppressed(env)) return;
 
@@ -188,10 +242,10 @@ export async function refreshUpdateNoticeCache(
     const latest = await resolveLatestVersion({
       packageName: PACKAGE_NAME,
       timeoutMs: options.timeoutMs ?? REFRESH_TIMEOUT_MS,
-      runner: options.runner,
+      runner: options.runner ?? noticeRunner(scope),
       latestVersion: env["OMS_UPDATE_LATEST_VERSION"],
     });
-    if (!latest.ok) return;
+    if (!latest.ok || scope.controller.signal.aborted) return;
 
     const existing = readCache(cachePath);
     writeCacheAtomically(cachePath, {
@@ -211,8 +265,8 @@ export async function refreshUpdateNoticeCache(
 }
 
 /**
- * Serve-path entrypoint: starts at most one detached refresh per process. Never
- * awaited by the caller, so startup latency is unaffected.
+ * Serve-path entrypoint: starts at most one asynchronous refresh per process.
+ * The default runner yields while npm is running; shutdown cancels that child.
  *
  * Skips the registry entirely while the installed channel's stamp is still
  * within the TTL: a fresh cache already answers the boot-time question, so
@@ -233,7 +287,22 @@ export function scheduleUpdateNoticeRefresh(
   if (stampIsFresh(stamp, options.now ?? Date.now())) return null;
 
   refreshStarted = true;
-  return refreshUpdateNoticeCache(options);
+  const scope: RefreshScope = { controller: new AbortController(), child: null };
+  scheduledRefresh = scope;
+  const pending = refreshCache(options, scope);
+  const clear = (): void => { if (scheduledRefresh === scope) scheduledRefresh = null; };
+  void pending.then(clear, clear);
+  return pending;
+}
+
+/** Stop the scheduled query and await its owned child, without a late cache write. */
+export async function cancelUpdateNoticeRefresh(): Promise<void> {
+  const scope = scheduledRefresh;
+  if (scope === null) return;
+  scope.controller.abort();
+  // Injected runners own their own resources; cancellation still suppresses
+  // their eventual cache write without waiting indefinitely for that seam.
+  await scope.child;
 }
 
 /** Clears the per-process refresh lock. Test-only seam. */
