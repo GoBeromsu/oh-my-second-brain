@@ -46,6 +46,10 @@ interface CodexManifest {
 const temporaries: string[] = [];
 const SKILL_FRONTMATTER_KEYS = ["name", "description", "aliases", "mcp_tool", "mcp_args"] as const;
 const execFileAsync = promisify(execFile);
+// npm packs and compresses the real file tree even for --dry-run. Keep its
+// deadline below the two integration-test budgets so stalls reject and clean up.
+const PACK_PROCESS_TIMEOUT_MS = 10_000;
+const PACK_TEST_TIMEOUT_MS = 15_000;
 
 afterEach(async () => {
   while (temporaries.length > 0) {
@@ -101,6 +105,9 @@ async function packedFiles(root: string): Promise<readonly string[]> {
   const { stdout } = await execFileAsync("npm", ["pack", "--dry-run", "--json"], {
     cwd: root,
     maxBuffer: 1024 * 1024,
+    timeout: PACK_PROCESS_TIMEOUT_MS,
+  }).catch((error: unknown) => {
+    throw new Error(`npm pack --dry-run --json failed in ${root} (${PACK_PROCESS_TIMEOUT_MS}ms limit)`, { cause: error });
   });
   const { name } = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as { name: string };
   return parseNpmPackManifest(stdout, name).files.map((file: { path: string }) => file.path).sort();
@@ -243,7 +250,7 @@ describe("packaged vendor discovery", () => {
     }
     expect(files).not.toContain("agents/oms-reviewer.md");
     expect(files).not.toContain("assets/codex/agents/oms-reviewer.toml");
-  });
+  }, PACK_TEST_TIMEOUT_MS);
 
   // Negative cases. Each names a concrete bad input the gate must reject, so a
   // green result cannot mean "the check did nothing".
@@ -306,5 +313,5 @@ describe("packaged vendor discovery", () => {
 
     await expect(readFile(path.join(root, "assets", "skills", "write", "SKILL.md"), "utf8")).resolves.toContain("name: write");
     expect(await packedFiles(root)).not.toContain("assets/skills/write/SKILL.md");
-  });
+  }, PACK_TEST_TIMEOUT_MS);
 });

@@ -1,5 +1,5 @@
 import * as childProcess from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -35,18 +35,22 @@ describe("OMS runtime binding", () => {
     expect(omsMcpVault(null, omsMcpLaunch("/vault").args)).toBeNull();
   });
 
-  it("verifies a major-scoped Homebrew opt link and survives keg update plus cleanup", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "oms-node-keg-"));
+  it.each(["canonical", "symlinked"])("verifies a Homebrew opt link (%s prefix) and survives keg cleanup", async spelling => {
+    const temporary = await realpath(await mkdtemp(path.join(tmpdir(), "oms-node-keg-")));
+    const canonical = path.join(temporary, "brew");
+    const root = spelling === "symlinked" ? path.join(temporary, "alias") : canonical;
     const old = path.join(root, "Cellar", "node@24", "24.19.0");
     const next = path.join(root, "Cellar", "node@24", "24.21.0");
     const opt = path.join(root, "opt", "node@24");
     try {
+      await mkdir(canonical);
+      if (spelling === "symlinked") await symlink(canonical, root);
       await mkdir(path.join(old, "bin"), { recursive: true });
       await mkdir(path.dirname(opt), { recursive: true });
       await writeFile(path.join(old, "bin", "node"), "old");
       await symlink(old, opt);
       const command = omsNodePath(path.join(old, "bin", "node"), "24.19.0");
-      expect(command).toBe(path.join(opt, "bin", "node"));
+      expect(command).toBe(path.join(canonical, "opt", "node@24", "bin", "node"));
       await mkdir(path.join(next, "bin"), { recursive: true });
       await writeFile(path.join(next, "bin", "node"), "next");
       await unlink(opt);
@@ -54,7 +58,7 @@ describe("OMS runtime binding", () => {
       await rm(old, { recursive: true });
       expect(await readFile(command, "utf8")).toBe("next");
       expect(omsNodePath(path.join(next, "bin", "node"), "24.21.0")).toBe(command);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(temporary, { recursive: true, force: true }); }
   });
 
   it("never substitutes an unverified, missing, wrong-major, or unversioned brew alias", () => {
