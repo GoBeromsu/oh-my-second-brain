@@ -13,7 +13,7 @@
   <a href="#빠른-시작">빠른 시작</a> ·
   <a href="#동작-방식">동작 방식</a> ·
   <a href="#문서">문서</a> ·
-  <a href="https://github.com/Xia-Ataraxia/oh-my-second-brain/releases">릴리스</a> ·
+  <a href="https://github.com/GoBeromsu/oh-my-second-brain/releases">릴리스</a> ·
   <a href="./README.md">English</a>
 </p>
 
@@ -103,7 +103,7 @@ oms search "프로젝트 결정" --vault /path/to/vault
 - **판정자는 하나다.** 저장된 쓰기는 계약 위반을 `{field, kind}` 경고로, 거부된 쓰기는 그 이유를 같은 형태로 반환하며, 각각 안내 명령 하나가 붙는다. 규칙 값, 저장소 경로, 계약 본문은 반환하지 않는다.
 - **변조된 봉인은 쓰기를 거부한다.** `.oms/settings.json`의 vault id가 이 기기의 봉인과 어긋나면 `contract-tampered`로 거부하고, `oms doctor contract`가 원인을 알려준다. 봉인 증거가 없거나 깨졌으면 `contract-unreadable` 경고와 함께 저장하며, 소유자가 `oms interview`로 다시 봉인할 때까지 이어진다. `oms doctor contract`가 볼트 이동이나 색인 항목의 누락·손상을 찾으면, 다시 봉인하지 않고 색인만 고치는 `oms doctor contract --fix`를 안내한다. 봉인이 아예 없는 기기에서는 판정하지 않는 것과 구별한다.
 
-[아키텍처](./docs/architecture.md), [컨벤션](./docs/conventions.md), [ADR-007](https://github.com/Xia-Ataraxia/oh-my-second-brain/blob/main/docs/decisions/ADR-007-vault-contract-ontology.md)을 참고한다.
+[아키텍처](./docs/architecture.md), [컨벤션](./docs/conventions.md), [ADR-007](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/decisions/ADR-007-vault-contract-ontology.md)을 참고한다.
 
 </details>
 
@@ -217,11 +217,11 @@ oms hook pre                                    Claude 쓰기를 계약으로 �
 | [설치](./docs/install.md): 설치, setup, 모델, 제거 | [아키텍처](./docs/architecture.md): 권위와 도메인 경계 |
 | [볼트 컨벤션](./docs/conventions.md): 설정과 봉인된 계약 | [CLI 맵](./docs/cli-map.md): 명령과 MCP 작업 매핑 |
 | [호스트 통합](./docs/adapters.md): Claude Code, Codex, Hermes | [검증된 target](./docs/verified-target.md): 안전한 볼트 선택 |
-| [릴리스](https://github.com/Xia-Ataraxia/oh-my-second-brain/releases): 배포 버전 | [변경 이력](./CHANGELOG.md): 무엇이 왜 달라졌는가 |
+| [릴리스](https://github.com/GoBeromsu/oh-my-second-brain/releases): 배포 버전 | [변경 이력](./CHANGELOG.md): 무엇이 왜 달라졌는가 |
 
 ## 기여와 크레딧
 
-[기여 가이드](https://github.com/Xia-Ataraxia/oh-my-second-brain/blob/main/CONTRIBUTING.md)를 읽거나, 재현 가능한 문제와 구체적인 제안을 [이슈](https://github.com/Xia-Ataraxia/oh-my-second-brain/issues)로 남길 수 있다.
+[기여 가이드](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/CONTRIBUTING.md)를 읽거나, 재현 가능한 문제와 구체적인 제안을 [이슈](https://github.com/GoBeromsu/oh-my-second-brain/issues)로 남길 수 있다.
 
 [ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md)는 [Ouroboros](./ACKNOWLEDGMENTS.md#ouroboros), [Gajae Code](./ACKNOWLEDGMENTS.md#gajae-code)의 deep-interview 등 설계에 영향을 준 아이디어를 기록한다. runtime 복제나 연구 결과를 뜻하지 않는다. 상단 이미지는 서가와 떠다니는 낱장, 지식의 별자리를 표현한 자체 제작 Blender 장면이다. 네이티브 렌더링, CC0 목재 텍스처, 타이포그래피 출처는 [아트워크 크레딧](./assets/readme/ARTWORK.md)에 기록했다. 개념 이미지이며 제품 화면, host smoke 증거, 제품 gate 통과 결과가 아니다.
 
