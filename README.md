@@ -13,8 +13,8 @@
   <a href="#quick-start">Quick start</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#documentation">Documentation</a> ·
-  <a href="https://github.com/Xia-Ataraxia/oh-my-second-brain/releases">Releases</a> ·
-  <a href="https://github.com/Xia-Ataraxia/oh-my-second-brain/blob/main/README.ko.md">한국어</a>
+  <a href="https://github.com/GoBeromsu/oh-my-second-brain/releases">Releases</a> ·
+  <a href="https://github.com/GoBeromsu/oh-my-second-brain/blob/main/README.ko.md">한국어</a>
 </p>
 
 <p align="center"><sub>Node.js ≥ 20 · 4 MCP tools · 6 shared skills · Package licensed MIT</sub></p>
@@ -103,7 +103,7 @@ These are example requests, not captured run results. Available workflows and wr
 - **One judge, bounded feedback.** A saved write returns its contract findings as `{field, kind}` warnings, and a refused write returns its reason the same way. Each of these comes with one guidance command, never rule values, store paths, or the contract body.
 - **A tampered seal blocks writes.** When the vault id in `.oms/settings.json` no longer matches this machine's seal, writes are refused as `contract-tampered`; `oms doctor contract` explains it. Missing or broken seal evidence is `contract-unreadable`: the write is saved with that warning until the owner reseals with `oms interview`. When `oms doctor contract` finds a moved vault or a missing or unreadable index entry, it names `oms doctor contract --fix`, which reindexes without resealing. A machine with no seal is a different case: its vault is not contract-judged.
 
-See [architecture](./docs/architecture.md), [conventions](./docs/conventions.md), and [ADR-007](https://github.com/Xia-Ataraxia/oh-my-second-brain/blob/main/docs/decisions/ADR-007-vault-contract-ontology.md).
+See [architecture](./docs/architecture.md), [conventions](./docs/conventions.md), and [ADR-007](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/docs/decisions/ADR-007-vault-contract-ontology.md).
 
 </details>
 
@@ -217,11 +217,11 @@ Note `create`, `append`, `update`, and `backfill` are retired operations. There 
 | [Installation](./docs/install.md): install, setup, models, removal | [Architecture](./docs/architecture.md): authority and domain boundaries |
 | [Vault conventions](./docs/conventions.md): settings and sealed contracts | [CLI map](./docs/cli-map.md): command and MCP operation mapping |
 | [Host integrations](./docs/adapters.md): Claude Code, Codex, Hermes | [Verified targets](./docs/verified-target.md): safe vault resolution |
-| [Releases](https://github.com/Xia-Ataraxia/oh-my-second-brain/releases): published versions | [Changelog](./CHANGELOG.md): what changed and why |
+| [Releases](https://github.com/GoBeromsu/oh-my-second-brain/releases): published versions | [Changelog](./CHANGELOG.md): what changed and why |
 
 ## Contributing & credits
 
-Contributions are welcome. Start with the [contributing guide](https://github.com/Xia-Ataraxia/oh-my-second-brain/blob/main/CONTRIBUTING.md), or [open an issue](https://github.com/Xia-Ataraxia/oh-my-second-brain/issues) with a reproducible problem or a focused proposal.
+Contributions are welcome. Start with the [contributing guide](https://github.com/GoBeromsu/oh-my-second-brain/blob/main/CONTRIBUTING.md), or [open an issue](https://github.com/GoBeromsu/oh-my-second-brain/issues) with a reproducible problem or a focused proposal.
 
 [ACKNOWLEDGMENTS](./ACKNOWLEDGMENTS.md) records design influences, including [Ouroboros](./ACKNOWLEDGMENTS.md#ouroboros) and [Gajae Code](./ACKNOWLEDGMENTS.md#gajae-code)'s deep-interview. Those credits describe ideas, not a copied runtime or a research result. The hero is an original Blender library scene with floating paper and knowledge-stars. [Artwork and material credits](./assets/readme/ARTWORK.md) describe its native rendering, CC0 wood texture, and typography. It is conceptual artwork, not a product screenshot, host-smoke evidence, or a product-gate result.
 
