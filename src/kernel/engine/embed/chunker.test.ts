@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { chunkDocument } from "./chunker.js";
+import { approximateTokenCount, chunkDocument } from "./chunker.js";
 import { UNTITLED_DOCUMENT_TITLE } from "../types.js";
 
 /** A body long enough to span several chunks at a small token budget. */
@@ -198,4 +198,56 @@ describe("chunkDocument", () => {
     const large = chunkDocument("notes/split.md", text, { maxTokens: 10000 });
     expect(small.length).toBeGreaterThan(large.length);
   });
+
+  it("excludes YAML frontmatter from chunk text while keeping the title", () => {
+    const raw = [
+      "---",
+      "aliases: []",
+      "date_created: 2026-01-01",
+      "tags: [a]",
+      "created_by: user",
+      "---",
+      "# Recovery",
+      "Stand up and walk.",
+      "",
+    ].join("\n");
+    const chunks = chunkDocument("notes/recovery.md", raw, { maxTokens: 50 });
+    expect(chunks.length).toBeGreaterThan(0);
+    for (const chunk of chunks) {
+      expect(chunk.text).not.toMatch(/^---/u);
+      expect(chunk.text).not.toContain("aliases:");
+      expect(chunk.text).not.toContain("created_by:");
+      expect(chunk.title).toBe("Recovery");
+    }
+  });
+
+  it("hard-splits a single overlong line so every chunk fits maxTokens", () => {
+    const maxTokens = 40;
+    const raw = "x".repeat(5000);
+    const chunks = chunkDocument("notes/transcript.md", raw, { maxTokens, overlapRatio: 0.15 });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(approximateTokenCount(chunk.text)).toBeLessThanOrEqual(maxTokens);
+    }
+  });
+
+  it("does not re-emit an overlong line through uncapped overlap", () => {
+    const maxTokens = 50;
+    // Pre-fix overlap retained the giant line and re-emitted it on every
+    // subsequent flush. Varied content makes each hard-split piece unique so
+    // accidental full-line duplication is visible.
+    const giant = Array.from({ length: 4000 }, (_, index) => String(index % 10)).join("");
+    const raw = `${giant}
+trailer line one
+trailer line two
+`;
+    const chunks = chunkDocument("notes/dup.md", raw, { maxTokens, overlapRatio: 0.15 });
+    expect(chunks.some((chunk) => chunk.text === giant)).toBe(false);
+    for (const chunk of chunks) {
+      expect(approximateTokenCount(chunk.text)).toBeLessThanOrEqual(maxTokens);
+    }
+    const fullGiantEmits = chunks.filter((chunk) => chunk.text.includes(giant)).length;
+    expect(fullGiantEmits).toBe(0);
+  });
+
 });

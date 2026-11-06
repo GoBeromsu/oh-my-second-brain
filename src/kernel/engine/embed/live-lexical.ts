@@ -16,7 +16,7 @@ import { fileMetadataWitness } from "../../conventions/file-snapshot.js";
 import { parseNote } from "../../conventions/frontmatter.js";
 import { makeDeferredStore } from "./deferred.js";
 import { scanIndexSources, type IndexSourceSnapshot } from "./freshness.js";
-import { chunkDocument } from "./chunker.js";
+import { chunkDocument, chunkerIdentity } from "./chunker.js";
 import { readDocumentSource, type DocumentSource } from "./source.js";
 import { openDetachedLexicalStore, type DetachedLexicalStore, type EngineStore } from "./store.js";
 import { LexicalDocumentBatch } from "./lexical-batch.js";
@@ -26,7 +26,7 @@ import { createOwnedTemporaryDirectory, type OwnedTemporaryDirectory } from "./o
 export const LIVE_LEXICAL_MEMORY_BYTES = 128 * 1024 * 1024;
 export const LIVE_LEXICAL_PROJECTION_BYTES = 64 * 1024 * 1024;
 export const LIVE_OBSERVED_MEMORY_BYTES = 64 * 1024 * 1024;
-const CHUNKER = JSON.stringify({ version: 1, maxTokens: 900, overlapRatio: 0.15 });
+const CHUNKER = chunkerIdentity();
 
 export interface LexicalCandidateSelection {
   readonly paths: readonly string[];

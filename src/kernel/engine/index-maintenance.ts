@@ -5,6 +5,7 @@ import { admitWriteTarget } from "../capture/safe.js";
 import type { WriteTargetSource } from "../conventions/write-protocol.js";
 import { scanIndexSources } from "./embed/freshness.js";
 import { embedQueuedDocument, listPendingDocumentRevisions, maintainDocumentIndex, readMaintenanceState } from "./embed/maintenance.js";
+import { chunkerIdentity } from "./embed/chunker.js";
 import { assertExternalDatabasePath, engineStorePath } from "./paths.js";
 import { acquireMaintenanceOwner } from "./maintenance-owner.js";
 import { MaintenanceController, type MaintenanceHooks, type MaintenanceMode, type MaintenanceSchedule, type MaintenanceStatus } from "./maintenance-controller.js";
@@ -109,7 +110,7 @@ export async function startIndexMaintenance(options: IndexMaintenanceOptions, de
       sources() {
         const snapshot = readMaintenanceState(dbPath);
         const legacy = new Set(snapshot.pending.filter(item => item.revision === null).map(item => item.docPath));
-        const chunker = JSON.stringify({ version: 1, maxTokens: 900, overlapRatio: 0.15 });
+        const chunker = chunkerIdentity();
         return new Map([...snapshot.documents].map(([docPath, source]) => [docPath,
           source === null || source.chunker !== chunker || legacy.has(docPath) ? null
             : source.fingerprint === null ? `bytes:${source.contentSha256}` : `metadata:${source.fingerprint}`]));
