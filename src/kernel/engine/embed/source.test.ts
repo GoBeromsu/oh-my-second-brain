@@ -130,7 +130,7 @@ describe("indexed source evidence", () => {
     await syncEngineStore({ vault, dbPath, embed: false, chunkerOpts: { maxTokens: 30, overlapRatio: 0 } });
     const store = openEngineStoreCore(dbPath);
     try {
-      expect(JSON.parse(store.readDocumentSources()!.get("alpha.md")!.chunker)).toEqual({ version: 1, maxTokens: 30, overlapRatio: 0 });
+      expect(JSON.parse(store.readDocumentSources()!.get("alpha.md")!.chunker)).toEqual({ version: 2, maxTokens: 30, overlapRatio: 0 });
       store.clearDocument("alpha.md");
       expect(store.readDocumentSources()!.has("alpha.md")).toBe(false);
     } finally { store.close(); }

@@ -4,6 +4,8 @@ Domain logic changes belong here.
 
 ## [Unreleased]
 
+- Embedding chunks use the note body after YAML frontmatter, hard-split any single line that exceeds the token budget, and cap retained overlap by `maxTokens * overlapRatio`. The stored chunker identity advances to version 2 so existing indexes re-chunk on the next sync. Frontmatter no longer dominates short-note vectors; overlong transcript lines no longer overflow the embedding context or repeat through uncapped overlap.
+
 - Managed MCP launches bind the setup Node and installed CLI, preferring a verified major-scoped Homebrew opt link. ABI diagnostics direct hosts back to the owning runtime instead of suggesting a shared-package rebuild. Package updates reject npm or PATH Node version/ABI mismatches even when the global prefix agrees.
 
 ## [0.21.0] - 2026-10-03

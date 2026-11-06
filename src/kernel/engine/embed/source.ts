@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileMetadataWitness, readFileSnapshot } from "../../conventions/file-snapshot.js";
 import type Database from "better-sqlite3";
 import type { Chunk, ChunkerOptions } from "../types.js";
+import { chunkerIdentity } from "./chunker.js";
 
 /** Filesystem change evidence, not a cryptographic claim about unchanged bytes. */
 export interface DocumentSource {
@@ -118,7 +119,7 @@ export async function readDocumentSource(vault: string, docPath: string, options
     source: {
       fingerprint: witness === null ? null : sourceFingerprint(root, docPath, target, witness),
       contentSha256: createHash("sha256").update(bytes).digest("hex"),
-      chunker: JSON.stringify({ version: 1, maxTokens: options?.maxTokens ?? 900, overlapRatio: options?.overlapRatio ?? 0.15 }),
+      chunker: chunkerIdentity(options),
     },
   };
 }

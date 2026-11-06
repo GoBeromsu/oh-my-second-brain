@@ -11,8 +11,19 @@ import { parseNote, type ParsedNote } from "../../conventions/frontmatter.js";
 import { UNTITLED_DOCUMENT_TITLE } from "../types.js";
 import type { Chunk, ChunkerOptions } from "../types.js";
 
-const DEFAULT_MAX_TOKENS = 900;
-const DEFAULT_OVERLAP_RATIO = 0.15;
+export const DEFAULT_MAX_TOKENS = 900;
+export const DEFAULT_OVERLAP_RATIO = 0.15;
+/** Bumped when chunk text identity changes (body-only, hard splits, overlap caps). */
+export const CHUNKER_VERSION = 2;
+
+/** Stable identity string stored with each indexed document source. */
+export function chunkerIdentity(opts: Partial<ChunkerOptions> = {}): string {
+  return JSON.stringify({
+    version: CHUNKER_VERSION,
+    maxTokens: opts?.maxTokens ?? DEFAULT_MAX_TOKENS,
+    overlapRatio: opts?.overlapRatio ?? DEFAULT_OVERLAP_RATIO,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -38,6 +49,11 @@ function tokenWeight(text: string): number {
   return weighted;
 }
 
+/** Approximate token count used by the chunker budget (matches flush checks). */
+export function approximateTokenCount(text: string): number {
+  return Math.ceil(tokenWeight(text) / 4);
+}
+
 /** True for CJK / Hangul / Kana / fullwidth codepoints (~1 token per char). */
 function isCjk(cp: number): boolean {
   return (
@@ -54,6 +70,30 @@ function isCjk(cp: number): boolean {
     (cp >= 0xff00 && cp <= 0xffef) || // Halfwidth & Fullwidth forms
     (cp >= 0x20000 && cp <= 0x2fa1f)  // CJK Ext B–F + compatibility supplement
   );
+}
+
+/**
+ * Split one over-budget string into pieces that each fit `maxWeight`
+ * quarter-tokens. Walks Unicode code points so CJK weighting stays consistent
+ * with `tokenWeight`.
+ */
+function hardSplitByWeight(text: string, maxWeight: number): string[] {
+  if (tokenWeight(text) <= maxWeight) return [text];
+  const chars = [...text];
+  const parts: string[] = [];
+  let start = 0;
+  let weight = 0;
+  for (let index = 0; index < chars.length; index++) {
+    const w = isCjk(chars[index]!.codePointAt(0)!) ? 4 : 1;
+    if (weight + w > maxWeight && weight > 0) {
+      parts.push(chars.slice(start, index).join(""));
+      start = index;
+      weight = 0;
+    }
+    weight += w;
+  }
+  if (start < chars.length) parts.push(chars.slice(start).join(""));
+  return parts.filter((part) => part.length > 0);
 }
 
 /**
@@ -148,6 +188,12 @@ function applyHeading(current: string[], level: number, title: string): string[]
  * Split a Markdown document into overlapping text chunks, respecting ATX
  * heading boundaries as natural split points.
  *
+ * Chunking uses `parsed.body` so YAML frontmatter never reaches the embedding
+ * input. When a single line exceeds `maxTokens`, it is hard-split by the same
+ * script-aware token weight. Overlap from the previous flush is capped by a
+ * token budget (`maxTokens * overlapRatio`) so an overlong retained line cannot
+ * force duplicate flushes of the same giant text.
+ *
  * Each chunk carries:
  *   - vault-relative `docPath`
  *   - zero-based `ordinal` within the document
@@ -155,10 +201,6 @@ function applyHeading(current: string[], level: number, title: string): string[]
  *   - `title` — the document title, prepended to this chunk's embedding input
  *   - `headingPath` — breadcrumb from doc root to the chunk's section
  *   - `sha` — SHA-256 digest of `title` + `text` for change-detection
- *
- * When a section exceeds `maxTokens`, it is further split line by line until
- * each emitted chunk fits the budget. Overlap lines from the previous flush
- * are prepended to maintain context continuity.
  */
 export function chunkDocument(
   docPath: string,
@@ -169,10 +211,13 @@ export function chunkDocument(
 ): Chunk[] {
   const maxTokens = opts.maxTokens ?? DEFAULT_MAX_TOKENS;
   const overlapRatio = opts.overlapRatio ?? DEFAULT_OVERLAP_RATIO;
-  // Number of overlap lines to carry into the next chunk
-  const overlapLineCount = Math.max(1, Math.round(10 * overlapRatio));
+  const maxWeight = maxTokens * 4;
+  // Token budget for retained overlap. Ratio 0 retains nothing.
+  const overlapTokenBudget = overlapRatio <= 0 ? 0 : Math.max(1, Math.floor(maxTokens * overlapRatio));
+  // Soft line-count cap kept for short-line notes (matches historical sizing).
+  const overlapLineCount = overlapRatio <= 0 ? 0 : Math.max(1, Math.round(10 * overlapRatio));
 
-  const lines = rawText.split("\n");
+  const lines = parsed.body.split("\n");
   const chunks: Chunk[] = [];
   const title = documentTitle(parsed);
   let ordinal = 0;
@@ -181,14 +226,13 @@ export function chunkDocument(
   let bufferWeight = 0;
   let headingPath: string[] = [];
 
-  const flush = (): void => {
-    const text = buffer.join("\n").trim();
-    if (!text) {
-      buffer = [];
-      lineWeights = [];
-      bufferWeight = 0;
-      return;
-    }
+  const clearBuffer = (): void => {
+    buffer = [];
+    lineWeights = [];
+    bufferWeight = 0;
+  };
+
+  const emit = (text: string): void => {
     chunks.push({
       docPath,
       ordinal: ordinal++,
@@ -197,48 +241,101 @@ export function chunkDocument(
       headingPath: headingPath.slice(),
       sha: chunkDigest(title, text),
     });
-    // Carry the last N lines as overlap into the next chunk
-    const retained = buffer.slice(-overlapLineCount);
-    const removed = buffer.length - retained.length;
-    // Each discarded line and its following newline leave the running weight
-    // once. Retained overlap keeps its original weight without rescanning text.
-    for (let index = 0; index < removed; index++) bufferWeight -= lineWeights[index]! + 1;
-    buffer = retained;
-    lineWeights = lineWeights.slice(-overlapLineCount);
   };
 
-  for (const line of lines) {
-    // Detect ATX headings (# through ######)
-    const hm = /^(#{1,6})\s+(.+)$/.exec(line);
-    if (hm) {
-      const level = hm[1]!.length;
-      const title = hm[2]!.trim();
-      headingPath = applyHeading(headingPath, level, title);
+  const retainOverlap = (): void => {
+    if (overlapTokenBudget <= 0 || overlapLineCount <= 0 || buffer.length === 0) {
+      clearBuffer();
+      return;
     }
+    let retainedWeight = 0;
+    let retainedCount = 0;
+    for (let index = buffer.length - 1; index >= 0; index--) {
+      const separator = retainedCount > 0 ? 1 : 0;
+      const nextWeight = retainedWeight + separator + lineWeights[index]!;
+      if (Math.ceil(nextWeight / 4) > overlapTokenBudget) break;
+      retainedWeight = nextWeight;
+      retainedCount += 1;
+      if (retainedCount >= overlapLineCount) break;
+    }
+    if (retainedCount === 0) {
+      clearBuffer();
+      return;
+    }
+    buffer = buffer.slice(-retainedCount);
+    lineWeights = lineWeights.slice(-retainedCount);
+    bufferWeight = retainedWeight;
+  };
 
-    const weight = tokenWeight(line);
-    if (buffer.length > 0) bufferWeight += 1; // The join separator is one quarter-token.
+  const flush = (): void => {
+    const text = buffer.join("\n").trim();
+    if (!text) {
+      clearBuffer();
+      return;
+    }
+    emit(text);
+    retainOverlap();
+  };
+
+  const fits = (lineWeight: number): boolean => {
+    const separator = buffer.length > 0 ? 1 : 0;
+    return Math.ceil((bufferWeight + separator + lineWeight) / 4) <= maxTokens;
+  };
+
+  const appendFittingLine = (line: string, weight: number): void => {
+    if (buffer.length > 0 && !fits(weight)) {
+      flush();
+    }
+    // Overlap alone can still refuse a new line after flush; drop it rather
+    // than emit a chunk that exceeds the budget.
+    if (buffer.length > 0 && !fits(weight)) {
+      clearBuffer();
+    }
+    if (buffer.length > 0) bufferWeight += 1;
     buffer.push(line);
     lineWeights.push(weight);
     bufferWeight += weight;
+  };
 
+  for (const line of lines) {
+    // Detect ATX headings (# through ######) on body lines only.
+    const hm = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (hm) {
+      const level = hm[1]!.length;
+      const headingTitle = hm[2]!.trim();
+      headingPath = applyHeading(headingPath, level, headingTitle);
+    }
+
+    const weight = tokenWeight(line);
+    if (weight > maxWeight) {
+      // Finish any pending buffer, then emit hard-split pieces without
+      // overlap between them. Retaining an over-budget line as overlap is
+      // what previously re-emitted the same giant text on every flush.
+      if (buffer.length > 0) flush();
+      const parts = hardSplitByWeight(line, maxWeight);
+      for (let index = 0; index < parts.length; index++) {
+        const part = parts[index]!;
+        emit(part);
+        if (index === parts.length - 1) {
+          clearBuffer();
+          const partWeight = tokenWeight(part);
+          buffer = [part];
+          lineWeights = [partWeight];
+          bufferWeight = partWeight;
+          retainOverlap();
+        }
+      }
+      continue;
+    }
+
+    appendFittingLine(line, weight);
     if (Math.ceil(bufferWeight / 4) >= maxTokens) {
       flush();
     }
   }
 
-  // Flush any remaining lines
   const remaining = buffer.join("\n").trim();
-  if (remaining) {
-    chunks.push({
-      docPath,
-      ordinal: ordinal++,
-      text: remaining,
-      title,
-      headingPath: headingPath.slice(),
-      sha: chunkDigest(title, remaining),
-    });
-  }
+  if (remaining) emit(remaining);
 
   return chunks;
 }

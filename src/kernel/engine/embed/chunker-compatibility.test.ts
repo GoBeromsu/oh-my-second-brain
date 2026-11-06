@@ -21,7 +21,7 @@ const options = [1, 1.25, 13, 64, 900].flatMap(maxTokens =>
 // END COMPATIBILITY INPUTS
 
 it("preserves canonical chunks and digests across line, Unicode and overlap boundaries", () => {
-  // Golden output from pre-optimization #205, tree 95783f5. It covers every
+  // Golden output for chunker version 2 (body-only, hard-split, token-capped overlap). It covers every
   // chunk's exact text, title, heading path, ordinal and digest in 150 cases.
   const digest = createHash("sha256");
   const sharedDigest = createHash("sha256");
@@ -31,6 +31,6 @@ it("preserves canonical chunks and digests across line, Unicode and overlap boun
       sharedDigest.update(JSON.stringify(chunkDocument(`case-${index}.md`, raw, opts, parseNote(raw))));
     }
   }
-  expect(digest.digest("hex")).toBe("eb571cc94b1db38afc6c5602e2b181ef3cd643fe3371df2be0dee03e079923db");
-  expect(sharedDigest.digest("hex")).toBe("eb571cc94b1db38afc6c5602e2b181ef3cd643fe3371df2be0dee03e079923db");
+  expect(digest.digest("hex")).toBe("922e154489f5d3558f6e15c626c1d4c789d8137d0e27278ad1efd3e16a623236");
+  expect(sharedDigest.digest("hex")).toBe("922e154489f5d3558f6e15c626c1d4c789d8137d0e27278ad1efd3e16a623236");
 });
