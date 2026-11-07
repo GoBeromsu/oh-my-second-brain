@@ -15,6 +15,8 @@ Claude's manifest keeps an explicit skill array. Codex's manifest keeps one shar
 
 The MCP server is started with `oms serve mcp`; `oms serve http` starts the HTTP surface. Neither server creates a vault engine store merely by starting. Claude uses `.mcp.json`, Codex uses `.mcp.codex.json`, and Hermes receives its registration in `~/.hermes/config.yaml`.
 
+MCP update notices use a cached version check. A missing or stale cache starts an asynchronous registry query with a four-second deadline while the server accepts requests; registry failure does not prevent serving. Stdin EOF, SIGINT or SIGTERM cancels and reaps that optional query before shutdown finishes. `OMS_UPDATE_NOTICE=0` suppresses the check and notice.
+
 All hosts expose the same four MCP tools: `write`, `search`, `interview`, and `doctor`. Skills are host workflows, not tool names. `distill` and `setup` are tool-less. The `write` tool takes `{path, content, template?, ifMatch?, check?}`: the agent supplies the whole note, and OMS judges it against the sealed contract and saves it unless a safety refusal denies it, returning any contract findings as warnings. See [the CLI map](./cli-map.md).
 
 Agents write and repair notes. Only a safety refusal denies a write; a denial, a missing or stale `ifMatch`, or an unverified target leaves the file unchanged. A saved write returns its contract findings as `{field, kind}` warnings with one guidance command, and a denial carries one too. OMS has no completion operation or reviewer handshake. Search stays read-only and does not depend on the contract. Sealing needs the owner's confirmation: the interactive `oms setup` or `oms interview`, `oms setup --answers` through the `setup` skill, or MCP `interview` `op: seal` on a confirmed proposal.
