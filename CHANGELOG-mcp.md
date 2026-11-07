@@ -4,6 +4,8 @@ MCP server tools and resources belong here.
 
 ## [Unreleased]
 
+- Cold-cache update notices now query the registry asynchronously, so a slow npm lookup does not block MCP initialization or tool requests. The optional query keeps its four-second deadline and is cancelled and reaped on EOF, SIGINT or SIGTERM before server shutdown finishes; a cancelled query does not update the cache.
+
 ## [0.21.0] - 2026-10-03
 
 - Default read-only MCP servers now close their resources on stdin EOF and termination signals, including disposable lexical disk files after a completed query. Previously that shutdown handler was installed only for opt-in maintenance servers, so ordinary client closure could leave scratch behind. Forced process termination may still leave an orphan directory.

@@ -33,6 +33,7 @@ import { EngineSearchBackend, requiresEmbeddings } from "../kernel/searchbackend
 import {
   buildServerInstructions,
   cachedUpdateNotice,
+  cancelUpdateNoticeRefresh,
   scheduleUpdateNoticeRefresh,
 } from "./update-notice.js";
 import { handleDoctor } from "./tools/doctor.js";
@@ -524,12 +525,18 @@ export async function runMcpServer(opts: OMSMcpServerOptions & { readonly mainte
     server = createOMSMcpServer(opts, maintenance);
     await server.connect(new StdioServerTransport());
   } catch (error) { try { await server?.close(); } finally { await maintenance?.stop(); } throw error; }
+  // The optional registry query must yield while serving and be reaped on EOF
+  // or a signal, including EOF observed before shutdown handlers are attached.
+  void scheduleUpdateNoticeRefresh({ installedVersion: SERVER_VERSION });
   {
     // The SDK transport does not close itself on stdin EOF. Default read-only
     // servers also own disposable lexical disk state that must be released.
     let shuttingDown: Promise<void> | undefined;
     const shutdown = (exitCode?: number): void => {
-      shuttingDown ??= server!.close();
+      shuttingDown ??= (async () => {
+        try { await cancelUpdateNoticeRefresh(); }
+        finally { await server!.close(); }
+      })();
       void shuttingDown.catch(error => { process.stderr.write(`[oms] ${error instanceof Error ? error.message : String(error)}\n`); }).finally(() => {
         process.stdin.off("end", onEnd); process.off("SIGINT", onInterrupt); process.off("SIGTERM", onTerminate);
         if (exitCode !== undefined) process.exit(exitCode);
@@ -541,7 +548,4 @@ export async function runMcpServer(opts: OMSMcpServerOptions & { readonly mainte
     process.stdin.once("end", onEnd); process.once("SIGINT", onInterrupt); process.once("SIGTERM", onTerminate);
     if (process.stdin.readableEnded) shutdown();
   }
-  // Detached and unawaited: a slow or offline registry must not delay serving.
-  // Returns null while the cache is fresh, so most boots start nothing at all.
-  void scheduleUpdateNoticeRefresh({ installedVersion: SERVER_VERSION });
 }
